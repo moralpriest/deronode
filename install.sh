@@ -1,0 +1,283 @@
+#!/usr/bin/env bash
+# install.sh — one-line installer for deronode (pwsh-free fallback)
+#
+#   curl -fsSL https://raw.githubusercontent.com/moralpriest/deronode/main/install.sh | bash
+#
+# install.ps1 is the unified installer for all OSes (run via pwsh on Unix);
+# this script is the fallback for systems without PowerShell 7.
+#
+# Clones deronode into ~/.local/share/deronode (or $XDG_DATA_HOME/deronode)
+# and symlinks the launcher onto PATH at ~/.local/bin/deronode. On Termux
+# (Android) it ALSO symlinks into $PREFIX/bin, the one directory guaranteed
+# to be on PATH there. Everywhere else it adds ~/.local/bin to your shell's
+# PATH persistently (bash / zsh / fish) when it isn't already there.
+# Idempotent: re-running pulls the latest version. Never touches the chain
+# data dir (config.json / chain/ / logs/ are gitignored).
+set -euo pipefail
+
+REPO_URL="https://github.com/moralpriest/deronode.git"
+BRANCH="main"
+
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+bin_home="${HOME}/.local/bin"
+install_dir="$data_home/deronode"
+
+is_termux=false
+# Same detection as node.sh / platform.ps1: $PREFIX is set by Termux and
+# $PREFIX/bin is its always-on-PATH dir. Requiring 'com.termux' in the path
+# avoids false positives when an unrelated PREFIX is exported on desktop Linux.
+if [ -n "${PREFIX:-}" ] && [[ "$PREFIX" == *com.termux* ]] && [ -d "$PREFIX/bin" ]; then
+    is_termux=true
+fi
+
+run_privileged() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+    else
+        echo "  [x] Root privileges are required to install PowerShell, but sudo was not found." >&2
+        return 1
+    fi
+}
+
+show_pwsh_install_guide() {
+    case "$(uname -s)" in
+        Darwin*)
+            echo "      brew install --cask powershell" >&2
+            echo "      Verify with: pwsh --version   (p-w-s-h)" >&2 ;;
+        *)
+            if $is_termux; then
+                echo "      PowerShell is NOT packaged for Termux. The bash fallback does" >&2
+                echo "      everything deronode needs; pwsh only unlocks the interactive menu." >&2
+                echo "      Note: derod is a glibc binary and cannot run on Termux itself." >&2
+            elif command -v apt-get >/dev/null 2>&1; then
+                echo "      Install PowerShell from the Microsoft apt repository:" >&2
+                echo "      https://learn.microsoft.com/powershell/scripting/install/install-ubuntu" >&2
+            elif command -v dnf >/dev/null 2>&1; then
+                echo "      Install PowerShell from the Microsoft rpm repository:" >&2
+                echo "      https://learn.microsoft.com/powershell/scripting/install/install-fedora" >&2
+            fi
+            ;;
+    esac
+    echo "      https://learn.microsoft.com/powershell/scripting/install/installing-powershell" >&2
+}
+
+install_pwsh_if_missing() {
+    command -v pwsh >/dev/null 2>&1 && return 0
+
+    if $is_termux; then
+        # PowerShell 7 is NOT packaged for Termux and derod cannot run there
+        # anyway; the bash fallback is the full interface on Android.
+        return 0
+    fi
+
+    [ "${DERONODE_SKIP_PWSH:-0}" = "1" ] && {
+        echo "  [!] Skipping automatic PowerShell 7 install (DERONODE_SKIP_PWSH=1)." >&2
+        return 1
+    }
+
+    if [ "${DERONODE_AUTO_INSTALL_PWSH:-0}" != "1" ]; then
+        # In `curl ... | bash`, stdout is a pipe, so do not use `-t 1` here.
+        # A controlling terminal is still safe to prompt through /dev/tty.
+        if [ -r /dev/tty ]; then
+            printf '  PowerShell 7 (pwsh) is missing. Install it now? [Y/n] ' >&2
+            read -r answer </dev/tty || answer='n'
+            case "$answer" in
+                n|N|no|NO) return 1 ;;
+            esac
+        else
+            echo "  [!] PowerShell 7 is missing; not installing automatically without a TTY." >&2
+            echo "      Set DERONODE_AUTO_INSTALL_PWSH=1 to approve unattended installation." >&2
+            show_pwsh_install_guide
+            return 1
+        fi
+    fi
+
+    echo "  [*] PowerShell 7 (pwsh) is missing; attempting to install it..."
+    if [ "$(uname -s)" = "Darwin" ]; then
+        brew_cmd="$(command -v brew 2>/dev/null || true)"
+        if [ -z "$brew_cmd" ]; then
+            for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+                if [ -x "$candidate" ]; then brew_cmd="$candidate"; break; fi
+            done
+        fi
+        if [ -z "$brew_cmd" ]; then
+            echo "  [!] Homebrew is required on macOS: https://brew.sh" >&2
+            return 1
+        fi
+        brew_prefix="$($brew_cmd --prefix 2>/dev/null || true)"
+        [ -d "$brew_prefix/bin" ] && export PATH="$brew_prefix/bin:$PATH"
+        "$brew_cmd" install --cask powershell || {
+            echo "  [!] Homebrew could not install PowerShell." >&2
+            echo "      Check existing installs with:" >&2
+            echo "      $brew_cmd list --formula powershell; $brew_cmd list --cask powershell" >&2
+            echo "      Then resolve any formula/cask conflict and retry:" >&2
+            echo "      $brew_cmd install --cask powershell" >&2
+            return 1
+        }
+        if ! command -v pwsh >/dev/null 2>&1; then
+            echo "  [!] Homebrew reported success, but 'pwsh' is not on PATH yet." >&2
+            echo "      Open a new terminal, then verify with: pwsh --version" >&2
+            return 1
+        fi
+    elif command -v apt-get >/dev/null 2>&1; then
+        # Prefer an existing package; otherwise register Microsoft's official
+        # repository for Debian/Ubuntu before installing.
+        if command -v apt-cache >/dev/null 2>&1 && apt-cache show powershell >/dev/null 2>&1; then
+            run_privileged apt-get update || return 1
+            run_privileged apt-get install -y powershell || return 1
+        elif [ -r /etc/os-release ] && command -v curl >/dev/null 2>&1; then
+            . /etc/os-release
+            case "$ID" in
+                ubuntu|debian)
+                    repo_pkg="$(mktemp "${TMPDIR:-/tmp}/packages-microsoft-prod.XXXXXX.deb")"
+                    curl -fsSL "https://packages.microsoft.com/config/$ID/$VERSION_ID/packages-microsoft-prod.deb" -o "$repo_pkg" || { rm -f "$repo_pkg"; return 1; }
+                    run_privileged dpkg -i "$repo_pkg" || { rm -f "$repo_pkg"; return 1; }
+                    rm -f "$repo_pkg"
+                    run_privileged apt-get update || return 1
+                    run_privileged apt-get install -y powershell || return 1
+                    ;;
+                *)
+                    echo "  [!] Automatic apt setup is supported for Ubuntu/Debian only." >&2
+                    return 1
+                    ;;
+            esac
+        else
+            return 1
+        fi
+    elif command -v dnf >/dev/null 2>&1 && command -v rpm >/dev/null 2>&1; then
+        if ! dnf info powershell >/dev/null 2>&1; then
+            if [ -r /etc/os-release ]; then
+                . /etc/os-release
+                case "$ID" in
+                    fedora)
+                        if [[ "$VERSION_ID" =~ ^[0-9]+$ ]]; then
+                            repo_url="https://packages.microsoft.com/config/fedora/$VERSION_ID/packages-microsoft-prod.rpm"
+                        else
+                            repo_url=""
+                        fi
+                        ;;
+                    rhel|centos|rocky|almalinux)
+                        repo_major="${VERSION_ID%%.*}"
+                        if [[ "$repo_major" =~ ^[0-9]+$ ]]; then
+                            repo_url="https://packages.microsoft.com/config/rhel/$repo_major/packages-microsoft-prod.rpm"
+                        else
+                            repo_url=""
+                        fi
+                        ;;
+                    *)
+                        repo_url="" ;;
+                esac
+                if [ -n "$repo_url" ]; then
+                    run_privileged dnf install -y "$repo_url" || return 1
+                fi
+            fi
+        fi
+        dnf info powershell >/dev/null 2>&1 || {
+            echo "  [!] PowerShell is not available in the configured dnf repositories." >&2
+            return 1
+        }
+        run_privileged dnf install -y powershell || return 1
+    elif command -v snap >/dev/null 2>&1; then
+        run_privileged snap install powershell --classic || return 1
+    else
+        return 1
+    fi
+    command -v pwsh >/dev/null 2>&1
+}
+
+if ! install_pwsh_if_missing; then
+    echo "  [!] PowerShell 7 was not installed; the bash fallback remains available." >&2
+    show_pwsh_install_guide
+fi
+
+mkdir -p "$data_home" "$bin_home"
+
+if [ -d "$install_dir/.git" ]; then
+    echo "[*] deronode already installed, updating..."
+    # Fast-forward pulls can fail when the local clone has diverged from
+    # upstream (rewritten history, stale shallow clone, local commits). User
+    # data (config.json, bin/, chain/, logs/) is untracked/gitignored, so
+    # adopting upstream exactly is safe when nothing TRACKED is at risk: the
+    # tree/index must be clean AND there must be no local-only commits —
+    # unless this is the shallow clone install.sh creates, where divergence
+    # means the remote tip was rewritten, not that the user committed locally.
+    if ! git -C "$install_dir" pull --ff-only origin "$BRANCH" 2>/dev/null; then
+        if git -C "$install_dir" diff --quiet \
+            && git -C "$install_dir" diff --cached --quiet \
+            && git -C "$install_dir" fetch origin "$BRANCH" 2>/dev/null; then
+            if [ "$(git -C "$install_dir" rev-parse --is-shallow-repository 2>/dev/null || echo false)" = "true" ] \
+                || [ "$(git -C "$install_dir" rev-list --count "origin/$BRANCH..HEAD" 2>/dev/null || echo 1)" -eq 0 ]; then
+                git -C "$install_dir" reset --hard "origin/$BRANCH" \
+                    && echo "  [*] Install repo had diverged from upstream; synced to latest $BRANCH" \
+                    || echo "  [x] Update failed: could not sync $install_dir to upstream." >&2
+            else
+                echo "  [x] Update skipped: $install_dir has local commits not present upstream." >&2
+                echo "      They are preserved. Push or back them up, then re-run the installer." >&2
+            fi
+        else
+            echo "  [x] Update skipped: $install_dir could not be updated cleanly." >&2
+            echo "      Local changes (if any) are preserved. Commit or stash them, then re-run." >&2
+        fi
+    fi
+else
+    echo "[*] Cloning deronode into $install_dir ..."
+    git clone --depth 1 --branch "$BRANCH" "$REPO_URL" "$install_dir"
+fi
+
+ln -sfn "$install_dir/deronode" "$bin_home/deronode"
+
+on_path=false
+case ":${PATH:-}:" in
+    *":$bin_home:"*) on_path=true ;;
+esac
+
+shell_name="$(basename "${SHELL:-}")"
+rc=""
+if $is_termux && [ -w "$PREFIX/bin" ]; then
+    # $PREFIX/bin is the only dir always on PATH in Termux, and it's
+    # user-writable — drop a symlink there so it works in ANY shell.
+    ln -sfn "$install_dir/deronode" "$PREFIX/bin/deronode"
+    echo "  [*] Linked deronode into $PREFIX/bin — on PATH in every Termux shell"
+elif ! $on_path; then
+    # Non-Termux: persist ~/.local/bin on PATH for the user's shell.
+    case "$shell_name" in
+        fish) rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
+        zsh)  rc="$HOME/.zshrc"; [ -f "$rc" ] || rc="$HOME/.zshenv" ;;
+        bash) rc="$HOME/.bashrc"
+              [ "$(uname -s)" = "Darwin" ] && rc="$HOME/.bash_profile" ;;
+    esac
+    if [ -n "$rc" ] && ! grep -qsF '# deronode' "$rc" 2>/dev/null; then
+        mkdir -p "$(dirname "$rc")"
+        case "$shell_name" in
+            fish) printf '\n# deronode\nfish_add_path "$HOME/.local/bin"\n' >> "$rc" ;;
+            *)    printf '\n# deronode\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc" ;;
+        esac
+        echo "  [*] Added ~/.local/bin to your PATH in $rc"
+    fi
+fi
+
+echo ""
+if $is_termux; then
+    echo "  deronode is on PATH now — just run it:  deronode"
+elif $on_path || [ -n "$rc" ]; then
+    echo "  Run it:  deronode   (restart your shell first if PATH was just updated)"
+else
+    echo "  Add ~/.local/bin to PATH if not already there:"
+    echo '    export PATH="$HOME/.local/bin:$PATH"'
+fi
+echo ""
+if command -v pwsh >/dev/null 2>&1; then
+    echo "  PowerShell 7 found — full interactive UI enabled."
+elif $is_termux; then
+    # On Termux/Android the bash fallback IS the full interface (PowerShell 7
+    # is not packaged there), so no PowerShell note is printed.
+    echo "  [*] Bash fallback enabled — the full deronode interface on Termux/Android."
+else
+    echo "  PowerShell 7 (pwsh) not found. The bash fallback still works,"
+    echo "  but for the full interactive menu install PowerShell 7 first:"
+    echo "    https://learn.microsoft.com/powershell/scripting/install/installing-powershell"
+fi
+echo ""
+echo "  Test:    deronode --help"

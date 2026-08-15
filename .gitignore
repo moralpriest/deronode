@@ -1,0 +1,12 @@
+bin/
+config.json
+config.bak
+*.log
+*.tar.gz
+*.zip
+*.tmp
+__pycache__/
+chain/
+logs/
+run-derod.sh
+*.pid

@@ -1,0 +1,12 @@
+{
+  "repo": "DEROFDN/derohe",
+  "host": "github-release",
+  "notes": "DERO node daemon (derod) only. Explorer, wallet-cli and miner are intentionally excluded.",
+  "assets": [
+    { "os": "linux",   "arch": "amd64",   "archive": "dero_linux_amd64.tar.gz" },
+    { "os": "linux",   "arch": "aarch64", "archive": "dero_linux_arm64.tar.gz" },
+    { "os": "darwin",  "arch": "*",       "archive": "dero_darwin_universal.tar.gz" },
+    { "os": "windows", "arch": "amd64",   "archive": "dero_windows_amd64.zip" },
+    { "os": "freebsd", "arch": "amd64",   "archive": "dero_freebsd_amd64.tar.gz" }
+  ]
+}
