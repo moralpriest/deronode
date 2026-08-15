@@ -329,10 +329,55 @@ cmd_start() {
 
 cmd_stop() {
     if node_is_external; then
-        echo "${C_WARN}[!] derod is system-installed (external) — manage it via your system service manager (e.g. systemctl stop derod).${C_RESET}" >&2
-        exit 0
+        external_stop
+        return $?
     fi
     service_stop
+}
+
+# external_stop — stop a system-installed (external) derod: resolve its unit
+# from the cgroup and stop via systemd (sudo when system-level), else kill the
+# bare process directly.
+external_stop() {
+    local pid unit cgroup svc
+    pid="$(pgrep -f 'derod-linux-amd64 --fastsync' | head -1)"
+    [ -n "$pid" ] || { echo "${C_ERR}[x] No running derod process found${C_RESET}" >&2; return 1; }
+    cgroup="$(grep '\.service$' "/proc/$pid/cgroup" 2>/dev/null | head -1)"
+    unit="${cgroup##*/}"
+    if [ -n "$unit" ]; then
+        echo "${C_INFO}[*] stopping $unit...${C_RESET}" >&2
+        if [ "${cgroup#*/system.slice/}" != "$cgroup" ]; then
+            if sudo -n systemctl stop "$unit" 2>/dev/null; then
+                echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
+                return 0
+            fi
+            if [ -t 0 ] && sudo systemctl stop "$unit"; then
+                echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
+                return 0
+            fi
+            echo "${C_WARN}[!] could not stop $unit (needs sudo) — run: sudo systemctl stop $unit${C_RESET}" >&2
+            return 1
+        else
+            if systemctl --user stop "$unit" 2>/dev/null; then
+                echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
+                return 0
+            fi
+            echo "${C_WARN}[!] could not stop $unit — run: systemctl --user stop $unit${C_RESET}" >&2
+            return 1
+        fi
+    fi
+    # No systemd unit — plain externally-launched process: kill it directly.
+    kill "$pid" 2>/dev/null
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null
+        sleep 1
+    fi
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "${C_WARN}[!] could not stop external derod (pid $pid) — no permission? stop it manually.${C_RESET}" >&2
+        return 1
+    fi
+    echo "${C_OK}[*] stopped external derod (pid $pid)${C_RESET}" >&2
 }
 
 cmd_status() {

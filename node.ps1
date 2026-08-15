@@ -298,10 +298,48 @@ function Start-Node {
 
 function Stop-Node {
     if (Test-ExternalNode) {
-        Write-Host '[!] derod is system-installed (external) - manage it via your system service manager (e.g. systemctl stop derod).' -ForegroundColor Yellow
-        exit 0
+        Stop-ExternalNode
+        return
     }
     Stop-Service
+}
+
+# Stop-ExternalNode — stop a system-installed (external) derod: resolve its unit
+# from the cgroup and stop via systemd (sudo when system-level), else kill the
+# bare process directly.
+function Stop-ExternalNode {
+    $proc = Get-ProcessTable | Where-Object { $_.Name -like 'derod*' } | Select-Object -First 1
+    if (-not $proc) { Write-Host '[x] No running derod process found' -ForegroundColor Red; exit 1 }
+    $cgroup = $null
+    if ($IsLinux) {
+        $cgroup = Get-Content "/proc/$($proc.Pid)/cgroup" -ErrorAction SilentlyContinue | Where-Object { $_ -match '\.service$' } | Select-Object -First 1
+    }
+    $unit = if ($cgroup) { ($cgroup -split '/')[-1] } else { $null }
+    if ($unit) {
+        Write-Host "[*] stopping $unit..." -ForegroundColor DarkCyan
+        if ($cgroup -match '/system\.slice/') {
+            & sudo -n systemctl stop $unit 2>$null
+            if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
+            if (-not [Console]::IsInputRedirected) {
+                & sudo systemctl stop $unit
+                if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
+            }
+            Write-Host "[!] could not stop $unit (needs sudo) - run: sudo systemctl stop $unit" -ForegroundColor Yellow
+            exit 1
+        } else {
+            & systemctl --user stop $unit 2>$null
+            if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
+            Write-Host "[!] could not stop $unit - run: systemctl --user stop $unit" -ForegroundColor Yellow
+            exit 1
+        }
+    }
+    Stop-Process -Id $proc.Pid -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    if (Get-Process -Id $proc.Pid -ErrorAction SilentlyContinue) {
+        Write-Host "[!] could not stop external derod (pid $($proc.Pid)) - no permission? stop it manually." -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "[*] stopped external derod (pid $($proc.Pid))" -ForegroundColor Green
 }
 function Show-Status {
     Write-Banner $script:DeronodeVersion
