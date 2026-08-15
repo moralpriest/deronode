@@ -34,6 +34,22 @@ node_running() {
     [ -n "$(get_node_info 2>/dev/null)" ]
 }
 
+# node_is_external — true when a derod is running whose binary is NOT the one
+# deronode manages (i.e. system-installed via systemd etc.). Robust to deronode
+# having a previously-downloaded copy in bin/ — we compare the running process
+# image, not the existence of our own binary.
+node_is_external() {
+    node_running || return 1
+    local pid image ours
+    pid="$(pgrep -f 'derod-linux-amd64 --fastsync' | head -1)"
+    [ -n "$pid" ] || return 1
+    image="$(readlink "/proc/$pid/exe" 2>/dev/null)"
+    image="${image% (deleted)}"
+    [ -n "$image" ] || return 1
+    ours="$(readlink -f "$BINARY_PATH" 2>/dev/null)"
+    [ "$image" != "$ours" ]
+}
+
 # print_status <bin> — one-line status line
 print_status() {
     local bin="$1" info h st th peers tag

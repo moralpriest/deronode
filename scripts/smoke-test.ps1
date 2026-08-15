@@ -44,7 +44,7 @@ if ($ps -match 'Install-PwshIfMissing' -and $ps -match 'Microsoft.PowerShell') {
 $svc = Get-Content (Join-Path $ProjectDir 'lib/service.ps1') -Raw
 if ($svc -match 'PSEdition') { Pass 'service picks pwsh vs powershell by edition' } else { Fail 'service picks pwsh vs powershell by edition' }
 if ($svc -match 'is-system-running') { Pass 'systemd backend requires live user session' } else { Fail 'systemd backend requires live user session' }
-if ($svc -match 'Get-CimInstance') { Pass 'pid stop falls back to command-line match' } else { Fail 'pid stop falls back to command-line match' }
+if ($svc -match 'Get-ProcessTable') { Pass 'pid stop uses portable process table' } else { Fail 'pid stop uses portable process table' }
 
 # 5. Version + help
 Write-Host ''

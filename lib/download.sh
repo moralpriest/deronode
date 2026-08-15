@@ -3,7 +3,6 @@
 # verify checksum.txt, extract only the daemon, cache under bin/derod.
 # Sourced by node.sh.
 
-GH_API="https://api.github.com/repos/DEROFDN/derohe/releases/latest"
 GH_DL="https://github.com/DEROFDN/derohe/releases/download"
 REPO="DEROFDN/derohe"
 
@@ -13,7 +12,7 @@ LAST_ASSET=""
 # Resolve the release tag and the archive name for this host from catalog.json.
 # Sets LAST_TAG / LAST_ASSET. Returns 1 when the catalog has no match.
 resolve_release() {
-    local cat_os cat_arch
+    local cat_os cat_arch attempt
     cat_os="$(catalog_os)"
     cat_arch="$(catalog_arch)"
 
@@ -22,8 +21,16 @@ resolve_release() {
     ' "$CATALOG_FILE" | head -1)"
     [ -n "$LAST_ASSET" ] || { echo "${C_ERR}[x] No catalog asset for $OS/$ARCH${C_RESET}" >&2; return 1; }
 
-    LAST_TAG="$(curl -fsSL -H 'Accept: application/vnd.github.v3+json' -H "User-Agent: deronode/$DERONODE_VERSION" "$GH_API" 2>/dev/null | jq -r '.tag_name' 2>/dev/null || true)"
-    [ -n "$LAST_TAG" ] && [ "$LAST_TAG" != "null" ] || { echo "${C_ERR}[x] Could not reach GitHub releases API for $REPO${C_RESET}" >&2; return 1; }
+    # Resolve the latest tag from the releases/latest redirect (CDN — no GitHub
+    # API quota, immune to unauthenticated rate limits). Retry on network blips.
+    LAST_TAG=""
+    for attempt in 1 2 3; do
+        loc="$(curl -fsSI -m 15 "https://github.com/$REPO/releases/latest" 2>/dev/null | awk 'tolower($1) ~ /^location:/ {print $2}' | tr -d '\r' | head -1)"
+        LAST_TAG="$(printf '%s' "$loc" | sed -n 's#.*/tag/##p')"
+        [ -n "$LAST_TAG" ] && [ "$LAST_TAG" != "null" ] && break
+        [ "$attempt" -lt 3 ] && sleep 1
+    done
+    [ -n "$LAST_TAG" ] && [ "$LAST_TAG" != "null" ] || { echo "${C_ERR}[x] Could not resolve the latest release tag for $REPO${C_RESET}" >&2; return 1; }
 }
 
 # bin/derod/.tag holds the tag the cached binary came from. Fresh when it

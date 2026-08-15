@@ -179,12 +179,11 @@ eval "$(sed -n '/^catalog_os()/,/^}/p' lib/platform.sh)"
 eval "$(sed -n '/^catalog_arch()/,/^}/p' lib/platform.sh)"
 eval "$(sed -n '/^resolve_release()/,/^}/p' lib/download.sh)"
 DERONODE_VERSION="1.0.0"
-GH_API="https://api.github.com/repos/DEROFDN/derohe/releases/latest"
 GH_DL="https://github.com/DEROFDN/derohe/releases/download"
 REPO="DEROFDN/derohe"
-# Stub curl: fake the GitHub releases API so this test needs no network.
+# Stub curl: fake the GitHub releases/latest redirect so this test needs no network.
 stub_curl() {
-    if [[ "$*" == *api.github.com* ]]; then echo '{"tag_name":"Release152"}'; return 0; fi
+    if [[ "$*" == *releases/latest* ]]; then printf 'HTTP/2 302\r\nlocation: https://github.com/DEROFDN/derohe/releases/tag/Release152\r\n\r\n'; return 0; fi
     command curl "$@"
 }
 curl() { stub_curl "$@"; }

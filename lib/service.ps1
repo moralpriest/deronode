@@ -105,9 +105,9 @@ function Stop-Service {
         $pid = [int](Get-Content $pidFile -Raw).Trim()
         Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
     }
-    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-        Where-Object { $_.ExecutablePath -like "$BinaryPath*" -or $_.CommandLine -like "*$BinaryPath*" } |
-        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Get-ProcessTable |
+        Where-Object { $_.Name -like 'derod*' -and $_.CommandLine -like "*$BinaryPath*" } |
+        ForEach-Object { Stop-Process -Id $_.Pid -Force -ErrorAction SilentlyContinue }
     Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
     Write-Host "[*] derod stopped" -ForegroundColor Green
 }

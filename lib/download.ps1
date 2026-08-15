@@ -1,7 +1,6 @@
 # lib/download.ps1 — resolve latest DEROFDN release, download derod, verify
 # checksum.txt, extract only the daemon into bin/derod.
 
-$script:GH_API = 'https://api.github.com/repos/DEROFDN/derohe/releases/latest'
 $script:GH_DL  = 'https://github.com/DEROFDN/derohe/releases/download'
 $script:Repo   = 'DEROFDN/derohe'
 $script:LastTag = ''
@@ -17,12 +16,22 @@ function Resolve-Release {
         return $false
     }
     $script:LastAsset = $asset[0].archive
-    try {
-        $h = @{ 'Accept' = 'application/vnd.github.v3+json'; 'User-Agent' = "deronode/$script:DeronodeVersion" }
-        $r = Invoke-RestMethod -Uri $script:GH_API -Headers $h -TimeoutSec 30
-        $script:LastTag = [string]$r.tag_name
-    } catch {
-        Write-Host "[x] Could not reach GitHub releases API for $($script:Repo)" -ForegroundColor Red
+    # Resolve the latest tag from the releases/latest redirect (CDN — no GitHub
+    # API quota, immune to unauthenticated rate limits). Retry on network blips.
+    $script:LastTag = ''
+    for ($i = 1; $i -le 3; $i++) {
+        try {
+            $resp = Invoke-WebRequest -Uri "https://github.com/$($script:Repo)/releases/latest" -Method Head -MaximumRedirection 1 -SkipHttpErrorCheck -TimeoutSec 20
+            $final = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+            if ($final) { $script:LastTag = ([uri]$final).Segments[-1].TrimEnd('/') }
+            if ($script:LastTag) { break }
+        } catch {
+            $script:LastTag = ''
+        }
+        if ($i -lt 3) { Start-Sleep -Seconds 1 }
+    }
+    if (-not $script:LastTag) {
+        Write-Host "[x] Could not resolve the latest release tag for $($script:Repo)" -ForegroundColor Red
         return $false
     }
     return $true

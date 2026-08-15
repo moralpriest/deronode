@@ -311,7 +311,7 @@ cmd_start() {
         print_argv
         exit 0
     fi
-    if node_running && [ ! -f "$BINARY_PATH" ]; then
+    if node_is_external; then
         echo "${C_WARN}[!] derod is system-installed (external) — manage it via your system service manager.${C_RESET}" >&2
         exit 0
     fi
@@ -328,7 +328,7 @@ cmd_start() {
 }
 
 cmd_stop() {
-    if node_running && [ ! -f "$BINARY_PATH" ]; then
+    if node_is_external; then
         echo "${C_WARN}[!] derod is system-installed (external) — manage it via your system service manager (e.g. systemctl stop derod).${C_RESET}" >&2
         exit 0
     fi
@@ -354,12 +354,48 @@ cmd_update() {
         return 0
     fi
     echo "${C_INFO}[*] Updating derod $old -> $LAST_TAG${C_RESET}"
+    if node_is_external; then
+        cmd_update_external || exit 1
+        return 0
+    fi
     node_running && was_running=true
     if $was_running; then service_stop; fi
     fetch_derod || exit 1
     if $was_running; then
         echo "${C_INFO}[*] restarting with the new binary...${C_RESET}"
         service_install
+    fi
+}
+
+# Update path for an externally-managed node (systemd etc.): download the new
+# derod into bin/, back up + replace the running binary, then restart its unit.
+cmd_update_external() {
+    local pid bin unit ts
+    pid="$(pgrep -f 'derod-linux-amd64 --fastsync' | head -1)"
+    [ -n "$pid" ] || { echo "${C_ERR}[x] Could not find the running derod process${C_RESET}" >&2; return 1; }
+    bin="$(readlink "/proc/$pid/exe" 2>/dev/null)"
+    bin="${bin% (deleted)}"
+    [ -n "$bin" ] && [ -f "$bin" ] || { echo "${C_ERR}[x] Could not resolve the running derod binary path${C_RESET}" >&2; return 1; }
+
+    fetch_derod || return 1
+
+    ts="$(date +%Y%m%d_%H%M%S)"
+    cp -f "$bin" "$bin.bak-$ts" || { echo "${C_ERR}[x] Backup failed: $bin.bak-$ts${C_RESET}" >&2; return 1; }
+    echo "${C_INFO}[*] backed up $bin -> $bin.bak-$ts${C_RESET}" >&2
+    cp -f "$BINARY_PATH" "$bin" || { echo "${C_ERR}[x] Replace failed: $bin${C_RESET}" >&2; return 1; }
+    chmod +x "$bin"
+    echo "${C_OK}[*] replaced $bin with $LAST_TAG${C_RESET}" >&2
+
+    unit="$(awk -F/ '/\.service$/ {print $NF}' "/proc/$pid/cgroup" 2>/dev/null | head -1)"
+    if [ -n "$unit" ]; then
+        echo "${C_INFO}[*] restarting $unit...${C_RESET}" >&2
+        if command -v sudo >/dev/null 2>&1 && sudo -n systemctl restart "$unit" 2>/dev/null; then
+            echo "${C_OK}[*] $unit restarted with $LAST_TAG${C_RESET}" >&2
+        else
+            echo "${C_WARN}[!] $unit is a system unit — restart it manually: sudo systemctl restart $unit${C_RESET}" >&2
+        fi
+    else
+        echo "${C_WARN}[!] external node has no systemd unit — restart it manually${C_RESET}" >&2
     fi
 }
 

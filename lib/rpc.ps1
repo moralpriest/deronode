@@ -21,6 +21,28 @@ function Test-NodeRunning {
     return $null -ne (Invoke-RpcCall 'DERO.GetInfo')
 }
 
+# Test-ExternalNode — true when a derod is running whose binary is NOT the one
+# deronode manages (system-installed via systemd etc.). Robust to deronode
+# having a previously-downloaded copy in bin/ — compares the running process
+# image, not the existence of our own binary.
+function Test-ExternalNode {
+    if (-not (Test-NodeRunning)) { return $false }
+    $proc = Get-ProcessTable | Where-Object { $_.Name -like 'derod*' } | Select-Object -First 1
+    if (-not $proc) { return $false }
+    $image = $null
+    try {
+        if ($IsLinux -and (Test-Path "/proc/$($proc.Pid)/exe")) {
+            $image = (Get-Item "/proc/$($proc.Pid)/exe").Target
+            $image = $image -replace ' \(deleted\)$', ''
+        } elseif ($proc.Path) {
+            $image = $proc.Path
+        }
+    } catch { $image = $null }
+    if (-not $image) { return $false }
+    $ours = (Get-Item $script:BinaryPath -ErrorAction SilentlyContinue).FullName
+    return ($image -ne $ours)
+}
+
 function Write-NodeStatus {
     param([string]$DerodDir)
     $bin = Join-Path $DerodDir 'derod'
@@ -37,7 +59,7 @@ function Write-NodeStatus {
         }
         $tag = '?'
         if (Test-Path (Join-Path $DerodDir '.tag')) { $tag = (Get-Content (Join-Path $DerodDir '.tag') -Raw).Trim() }
-        if (Test-Path $DerodDir) {
+        if (Test-Path $bin) {
             Write-Host "  derod $tag  data: $($script:DataDirReal)  log: $($script:LogDirReal)"
         } else {
             Write-Host "  derod system-installed (external, not managed by deronode)"

@@ -279,7 +279,7 @@ function Start-Node {
         Write-Host "  $($script:BinaryPath) $($argv -join ' ')"
         exit 0
     }
-    if ((Test-NodeRunning) -and (-not (Test-Path $script:BinaryPath))) {
+    if (Test-ExternalNode) {
         Write-Host '[!] derod is system-installed (external) - manage it via your system service manager.' -ForegroundColor Yellow
         exit 0
     }
@@ -297,7 +297,7 @@ function Start-Node {
 }
 
 function Stop-Node {
-    if ((Test-NodeRunning) -and (-not (Test-Path $script:BinaryPath))) {
+    if (Test-ExternalNode) {
         Write-Host '[!] derod is system-installed (external) - manage it via your system service manager (e.g. systemctl stop derod).' -ForegroundColor Yellow
         exit 0
     }
@@ -319,10 +319,52 @@ function Update-Node {
     if (Test-Path $tagfile) { $old = (Get-Content $tagfile -Raw).Trim() }
     if (Test-CacheFresh) { Write-Host "[*] Already at latest ($($script:LastTag))." -ForegroundColor Green; return }
     Write-Host "[*] Updating derod $old -> $($script:LastTag)" -ForegroundColor DarkCyan
+    if (Test-ExternalNode) {
+        Update-ExternalNode
+        return
+    }
     $wasRunning = Test-NodeRunning
     if ($wasRunning) { Stop-Service }
     if (-not (Invoke-FetchDerod $script:Platform)) { exit 1 }
     if ($wasRunning) { Write-Host '[*] restarting with the new binary...' -ForegroundColor DarkCyan; Install-Service }
+}
+
+function Update-ExternalNode {
+    $proc = Get-ProcessTable | Where-Object { $_.Name -like 'derod*' } | Select-Object -First 1
+    if (-not $proc) { Write-Host '[x] Could not find the running derod process' -ForegroundColor Red; exit 1 }
+    $bin = ''
+    if ($IsLinux -and (Test-Path "/proc/$($proc.Pid)/exe")) {
+        $bin = (Get-Item "/proc/$($proc.Pid)/exe").Target
+        $bin = $bin -replace ' \(deleted\)$', ''
+    }
+    if (-not $bin -or -not (Test-Path $bin)) { Write-Host '[x] Could not resolve the running derod binary path' -ForegroundColor Red; exit 1 }
+
+    if (-not (Invoke-FetchDerod $script:Platform)) { exit 1 }
+
+    $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
+    Copy-Item $bin "$bin.bak-$ts" -Force -ErrorAction Stop
+    Write-Host "[*] backed up $bin -> $bin.bak-$ts" -ForegroundColor DarkCyan
+    Copy-Item $script:BinaryPath $bin -Force
+    if ($IsWindows) { } else { & chmod +x $bin }
+    Write-Host "[*] replaced $bin with $($script:LastTag)" -ForegroundColor Green
+
+    $unit = ''
+    if ($IsLinux) {
+        $unit = (Get-Content "/proc/$($proc.Pid)/cgroup" -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '\.service$' } | Select-Object -First 1)
+        if ($unit) { $unit = ($unit -split '/')[-1] }
+    }
+    if ($unit) {
+        Write-Host "[*] restarting $unit..." -ForegroundColor DarkCyan
+        & sudo -n systemctl restart $unit 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[*] $unit restarted with $($script:LastTag)" -ForegroundColor Green
+        } else {
+            Write-Host "[!] $unit is a system unit - restart it manually: sudo systemctl restart $unit" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host '[!] external node has no systemd unit - restart it manually' -ForegroundColor Yellow
+    }
 }
 function Reconfigure-Node { Configure; Write-Host '[*] Done. Run deronode start to launch.' -ForegroundColor Green }
 

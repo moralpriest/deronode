@@ -9,4 +9,5 @@ __pycache__/
 chain/
 logs/
 run-derod.sh
+run-derod.ps1
 *.pid
