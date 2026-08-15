@@ -249,7 +249,7 @@ configure() {
 # ── Menu ──
 menu() {
     draw_banner
-    if [ ! -f "$BINARY_PATH" ]; then
+    if [ ! -f "$BINARY_PATH" ] && ! node_running; then
         echo "  No derod installed yet."
         echo ""
         echo "  [1] Configure & install derod"
@@ -311,6 +311,10 @@ cmd_start() {
         print_argv
         exit 0
     fi
+    if node_running && [ ! -f "$BINARY_PATH" ]; then
+        echo "${C_WARN}[!] derod is system-installed (external) — manage it via your system service manager.${C_RESET}" >&2
+        exit 0
+    fi
     [ -f "$CONFIG_FILE" ] || { echo "${C_INFO}[*] No config yet — running first-run setup.${C_RESET}" >&2; configure; }
     ensure_binary || exit 1
     apply_testnet_defaults
@@ -324,6 +328,10 @@ cmd_start() {
 }
 
 cmd_stop() {
+    if node_running && [ ! -f "$BINARY_PATH" ]; then
+        echo "${C_WARN}[!] derod is system-installed (external) — manage it via your system service manager (e.g. systemctl stop derod).${C_RESET}" >&2
+        exit 0
+    fi
     service_stop
 }
 

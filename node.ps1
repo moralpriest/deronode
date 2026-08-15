@@ -229,7 +229,7 @@ function Ensure-Binary {
 
 function Show-Menu {
     Write-Banner $script:DeronodeVersion
-    if (-not (Test-Path $script:BinaryPath)) {
+    if (-not (Test-Path $script:BinaryPath) -and -not (Test-NodeRunning)) {
         Write-Host '  No derod installed yet.'
         Write-Host ''
         Write-Host '  [1] Configure & install derod'
@@ -279,6 +279,10 @@ function Start-Node {
         Write-Host "  $($script:BinaryPath) $($argv -join ' ')"
         exit 0
     }
+    if ((Test-NodeRunning) -and (-not (Test-Path $script:BinaryPath))) {
+        Write-Host '[!] derod is system-installed (external) - manage it via your system service manager.' -ForegroundColor Yellow
+        exit 0
+    }
     if (-not (Test-Path $script:ConfigFile)) { Configure }
     if (-not (Ensure-Binary)) { exit 1 }
     Apply-TestnetDefaults
@@ -292,7 +296,13 @@ function Start-Node {
     }
 }
 
-function Stop-Node { Stop-Service }
+function Stop-Node {
+    if ((Test-NodeRunning) -and (-not (Test-Path $script:BinaryPath))) {
+        Write-Host '[!] derod is system-installed (external) - manage it via your system service manager (e.g. systemctl stop derod).' -ForegroundColor Yellow
+        exit 0
+    }
+    Stop-Service
+}
 function Show-Status {
     Write-Banner $script:DeronodeVersion
     if ((Test-NodeRunning) -or (Test-Path $script:BinaryPath)) {
