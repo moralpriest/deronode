@@ -37,7 +37,11 @@ function Write-NodeStatus {
         }
         $tag = '?'
         if (Test-Path (Join-Path $DerodDir '.tag')) { $tag = (Get-Content (Join-Path $DerodDir '.tag') -Raw).Trim() }
-        Write-Host "  derod $tag  data: $($script:DataDirReal)  log: $($script:LogDirReal)"
+        if (Test-Path $DerodDir) {
+            Write-Host "  derod $tag  data: $($script:DataDirReal)  log: $($script:LogDirReal)"
+        } else {
+            Write-Host "  derod system-installed (external, not managed by deronode)"
+        }
     } else {
         Write-Host "  stopped" -ForegroundColor DarkGray
         if (Test-Path $bin) {

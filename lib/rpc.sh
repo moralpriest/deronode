@@ -49,7 +49,11 @@ print_status() {
             echo "${C_WARN}● syncing  height $h/$th  stable $st  peers $peers${C_RESET}"
         fi
         tag="$(cat "$bin/.tag" 2>/dev/null || echo '?')"
-        echo "  derod $tag  data: $DATA_DIR_REAL  log: $LOG_DIR_REAL"
+        if [ -f "$bin" ]; then
+            echo "  derod $tag  data: $DATA_DIR_REAL  log: $LOG_DIR_REAL"
+        else
+            echo "  derod system-installed (external, not managed by deronode)"
+        fi
     else
         echo "${C_MUTE}○ stopped${C_RESET}"
         [ -f "$bin/derod" ] && echo "  derod $(cat "$bin/.tag" 2>/dev/null || echo '?') installed — run 'deronode start'"

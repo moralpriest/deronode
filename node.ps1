@@ -295,11 +295,12 @@ function Start-Node {
 function Stop-Node { Stop-Service }
 function Show-Status {
     Write-Banner $script:DeronodeVersion
-    if (-not (Test-Path $script:BinaryPath)) {
+    if ((Test-NodeRunning) -or (Test-Path $script:BinaryPath)) {
+        Write-NodeStatus (Join-Path $script:BinDir 'derod')
+    } else {
         Write-Host "  derod is not installed. Run 'deronode' or 'deronode start'." -ForegroundColor DarkGray
         exit 0
     }
-    Write-NodeStatus (Join-Path $script:BinDir 'derod')
 }
 function Update-Node {
     if (-not (Resolve-Release $script:Platform)) { exit 1 }

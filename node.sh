@@ -329,11 +329,12 @@ cmd_stop() {
 
 cmd_status() {
     draw_banner
-    if [ ! -f "$BINARY_PATH" ]; then
+    if node_running || [ -f "$BINARY_PATH" ]; then
+        print_status "$BIN_DIR/derod"
+    else
         echo "${C_MUTE}derod is not installed. Run 'deronode' or 'deronode start'.${C_RESET}"
         exit 0
     fi
-    print_status "$BIN_DIR/derod"
 }
 
 cmd_update() {
