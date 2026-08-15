@@ -12,7 +12,6 @@ function Write-Banner {
     param([string]$Version)
     Write-Host ""
     Write-Host "  deronode v$Version - DERO node installer & manager" -ForegroundColor Cyan
-    Write-Host "  derod only, from DEROFDN/derohe latest release. Explorer/wallet/miner excluded." -ForegroundColor DarkGray
     Write-Host ""
 }
 

@@ -18,7 +18,6 @@ draw_banner() {
     local v="$DERONODE_VERSION"
     echo "${C_BOLD}${C_INFO}"
     echo "  deronode v$v — DERO node installer & manager"
-    echo "${C_DIM}  derod only, from DEROFDN/derohe latest release. Explorer/wallet/miner excluded.${C_RESET}"
     echo ""
 }
 
