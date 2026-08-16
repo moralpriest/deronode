@@ -89,6 +89,12 @@ snapshot_verify_sha256() {
     ( cd "$dir" && $tool -c "$name.sha256" >/dev/null 2>&1 )
 }
 
+# True when stdin is an interactive terminal (prompts allowed). Separated so
+# the smoke suite can force the interactive branch.
+snapshot_stdin_tty() {
+    [ -t 0 ]
+}
+
 snapshot_pack() {
     local chain_dir out_dir level ts height name raw_size exc e out sha
     chain_dir="$(snapshot_chain_dir)"

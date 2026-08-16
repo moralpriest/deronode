@@ -208,6 +208,16 @@ $menuSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($menuSrc -match '''6'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 6 sets Action=reconfigure" } else { Fail "menu option 6 sets Action=reconfigure" }
 if ($menuSrc -match "'reconfigure' \{ Reconfigure-Node \}") { Pass "post-menu switch dispatches reconfigure" } else { Fail "post-menu switch dispatches reconfigure" }
 
+# 10. Snapshot prompts to stop a running node (source-grep on node.ps1)
+Write-Host ''
+Write-Host '10. Snapshot prompt-to-stop wiring:'
+$invokeSnap = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($invokeSnap -match 'Test-StdinInteractive' -and $invokeSnap -match 'Read-YesNo "derod is running on' -and $invokeSnap -match 'Stop-Node') { Pass 'Invoke-Snapshot prompts to stop a running node' } else { Fail 'Invoke-Snapshot prompts to stop a running node' }
+if ($invokeSnap -match 'Start-ExternalNode' -and $invokeSnap -match 'Install-Service') { Pass 'Invoke-Snapshot restarts after snapshot (external + managed)' } else { Fail 'Invoke-Snapshot restarts after snapshot (external + managed)' }
+if ($invokeSnap -match 'Test-SnapshotRunningOnDataDir' -and $invokeSnap -match 'SnapshotKeepRunning') { Pass 'Invoke-Snapshot keeps library guard condition' } else { Fail 'Invoke-Snapshot keeps library guard condition' }
+$snapLib = Get-Content (Join-Path $ProjectDir 'lib/snapshot.ps1') -Raw
+if ($snapLib -match 'function Test-StdinInteractive') { Pass 'lib/snapshot.ps1 defines Test-StdinInteractive' } else { Fail 'lib/snapshot.ps1 defines Test-StdinInteractive' }
+
 Write-Host ''
 Write-Host "=== results: $PASS passed, $FAIL failed ==="
 exit $(if ($FAIL -eq 0) { 0 } else { 1 })

@@ -108,6 +108,10 @@ function Test-Sha256Verify {
     } finally { Pop-Location }
 }
 
+# True when stdin is an interactive terminal (prompts allowed). Separated so
+# the smoke suite can force the interactive branch.
+function Test-StdinInteractive { return -not [Console]::IsInputRedirected }
+
 function New-Snapshot {
     $chainDir = Get-SnapshotChainDir
     $outDir = if ($script:SnapshotDir) { $script:SnapshotDir } else { $script:SnapshotDirReal }

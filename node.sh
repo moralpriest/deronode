@@ -494,6 +494,26 @@ cmd_reconfigure() {
 cmd_snapshot() {
     resolve_paths
     SNAPSHOT_DIR="${SNAPSHOT_OUT:-$SNAPSHOT_DIR_REAL}"
+    # Snapshot needs the chain quiet. If derod is running against our data dir
+    # (and --keep-running wasn't passed), offer to stop it, snapshot, then
+    # restart. Only prompts on an interactive terminal so piped/scripted calls
+    # never auto-stop the node; declining falls through to the library guard.
+    if ! $DRY_RUN \
+       && snapshot_running_on_data_dir \
+       && [ "${SNAPSHOT_KEEP_RUNNING:-false}" != "true" ] \
+       && snapshot_stdin_tty \
+       && [ "$(yesno "derod is running on $DATA_DIR_REAL - stop it, snapshot, then restart?" y)" = "y" ]; then
+        echo "${C_INFO}[*] stopping derod...${C_RESET}"
+        cmd_stop || exit 1
+        snapshot_pack || exit 1
+        echo "${C_INFO}[*] restarting derod...${C_RESET}"
+        if node_is_external; then
+            external_start
+        else
+            service_install
+        fi
+        return $?
+    fi
     snapshot_pack || exit 1
 }
 

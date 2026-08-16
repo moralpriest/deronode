@@ -384,6 +384,69 @@ echo "$menu_src" | grep -q '6) ACTION=reconfigure' && pass "menu option 6 sets A
 entry_src="$(sed -n '/^case "\$ACTION" in/,$p' node.sh)"
 echo "$entry_src" | grep -q 'reconfigure) cmd_reconfigure ;;' && pass "post-menu case dispatches reconfigure" || fail "post-menu case dispatches reconfigure"
 
+# 15. Snapshot prompts to stop a running node (stub-extracted from node.sh)
+echo ""
+echo "15. Snapshot prompt-to-stop:"
+eval "$(sed -n '/^cmd_snapshot()/,/^}/p' node.sh)"
+snapshot_running_on_data_dir() { return 0; }
+snapshot_stdin_tty() { return 0; }
+resolve_paths() { :; }
+yesno() { echo "$SNAP_ANS"; }
+cmd_stop() { echo "STOP_CALLED" >> "$ORDER"; }
+snapshot_pack() { echo "SNAPSHOT_PACK_CALLED" >> "$ORDER"; return 0; }
+node_is_external() { return 1; }
+service_install() { echo "SERVICE_INSTALL_CALLED" >> "$ORDER"; return 0; }
+external_start() { echo "EXTERNAL_START_CALLED" >> "$ORDER"; return 0; }
+C_OK=''; C_RESET=''; C_INFO=''; C_ERR=''; C_WARN=''
+DRY_RUN=false
+SNAPSHOT_KEEP_RUNNING=false
+SNAPSHOT_OUT=""
+SNAPSHOT_DIR_REAL="$SNAPFIX/out2"
+DATA_DIR_REAL="$SNAPCHAIN"
+ORDER="$(mktemp)"
+
+SNAP_ANS=y; cmd_snapshot
+stop_ln=$(grep -n '^STOP_CALLED$' "$ORDER" | cut -d: -f1)
+pack_ln=$(grep -n '^SNAPSHOT_PACK_CALLED$' "$ORDER" | cut -d: -f1)
+inst_ln=$(grep -n '^SERVICE_INSTALL_CALLED$' "$ORDER" | cut -d: -f1)
+if [ -n "$stop_ln" ] && [ -n "$pack_ln" ] && [ -n "$inst_ln" ] && [ "$stop_ln" -lt "$pack_ln" ] && [ "$pack_ln" -lt "$inst_ln" ]; then
+    pass "interactive yes: stop -> snapshot -> restart order"
+else
+    fail "interactive yes: stop -> snapshot -> restart order (order: $(tr '\n' ' ' < "$ORDER"))"
+fi
+
+: > "$ORDER"; SNAP_ANS=n; cmd_snapshot
+if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
+    pass "interactive no: refused without stopping"
+else
+    fail "interactive no: refused without stopping"
+fi
+
+: > "$ORDER"; snapshot_stdin_tty() { return 1; }; SNAP_ANS=y; cmd_snapshot
+if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
+    pass "non-interactive: never auto-stops"
+else
+    fail "non-interactive: never auto-stops"
+fi
+
+: > "$ORDER"; snapshot_stdin_tty() { return 0; }; SNAPSHOT_KEEP_RUNNING=true; cmd_snapshot
+if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
+    pass "--keep-running: no stop prompt"
+else
+    fail "--keep-running: no stop prompt"
+fi
+SNAPSHOT_KEEP_RUNNING=false
+
+: > "$ORDER"; DRY_RUN=true; cmd_snapshot
+if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
+    pass "dry-run: no stop prompt"
+else
+    fail "dry-run: no stop prompt"
+fi
+DRY_RUN=false
+rm -f "$ORDER"
+unset -f cmd_snapshot snapshot_running_on_data_dir snapshot_stdin_tty resolve_paths yesno cmd_stop snapshot_pack node_is_external service_install external_start
+
 echo ""
 echo "=== results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

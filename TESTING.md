@@ -34,6 +34,15 @@ fields, dry-run writes nothing, the running guard refuses then `--keep-running`
 overrides, and restore reproduces the includes while omitting decoys and
 keeping a `.bak-<ts>`.
 
+When the snapshot is triggered interactively while the node is running against
+the data dir (e.g. menu option 8), the wrapper now prompts
+`stop it, snapshot, then restart? [Y/n]`; answering yes stops the node, packs
+the snapshot, then restarts it (external via its systemd unit, managed via
+service install). The prompt only appears on an interactive terminal — piped or
+scripted `deronode snapshot` calls never auto-stop and fall through to the
+library guard, which keeps refusing unless `--keep-running` is passed.
+(Sections 15 bash / 10 ps cover this prompt-to-stop flow.)
+
 Manual smoke against the real (stopped) node:
 
 ```bash

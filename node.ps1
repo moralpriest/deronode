@@ -445,6 +445,19 @@ function Reconfigure-Node { Configure; Write-Host '[*] Done. Run deronode start 
 function Invoke-Snapshot {
     Resolve-Paths
     $script:SnapshotDir = if ($script:SnapshotOut) { $script:SnapshotOut } else { $script:SnapshotDirReal }
+    # Snapshot needs the chain quiet. If derod is running against our data dir
+    # (and --keep-running wasn't passed), offer to stop it, snapshot, then
+    # restart. Only prompts on an interactive terminal so piped/scripted calls
+    # never auto-stop the node; declining falls through to the library guard.
+    if (-not $script:DryRun -and (Test-SnapshotRunningOnDataDir) -and -not $script:SnapshotKeepRunning -and (Test-StdinInteractive) -and
+        (Read-YesNo "derod is running on $($script:DataDirReal) - stop it, snapshot, then restart?" 'y')) {
+        Write-Host '[*] stopping derod...' -ForegroundColor DarkCyan
+        Stop-Node
+        if (-not (New-Snapshot)) { exit 1 }
+        Write-Host '[*] restarting derod...' -ForegroundColor DarkCyan
+        if (Test-ExternalInstalled) { Start-ExternalNode } else { Install-Service }
+        return
+    }
     if (-not (New-Snapshot)) { exit 1 }
 }
 function Invoke-Restore {
