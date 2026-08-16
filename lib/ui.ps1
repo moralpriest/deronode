@@ -8,11 +8,46 @@ function Get-TerminalWidth {
     return 80
 }
 
+function Test-IsUnicodeTerminal {
+    try {
+        $oem = [Console]::OutputEncoding
+        if ($oem -and $oem.WebName -match 'utf-?8') { return $true }
+    } catch {}
+    if ($env:LANG -match '[Uu][Tt][Ff]-?8' -or $env:LC_ALL -match '[Uu][Tt][Ff]-?8') { return $true }
+    return $false
+}
+
+$script:UnicodeBox = @{
+    TopLeft = '╔'; TopRight = '╗'; BotLeft = '╚'; BotRight = '╝'
+    Horiz = '═'; Vert = '║'; MenuDot = '·'
+}
+$script:AsciiBox = @{
+    TopLeft = '+'; TopRight = '+'; BotLeft = '+'; BotRight = '+'
+    Horiz = '='; Vert = '|'; MenuDot = '-'
+}
+
+function Get-BoxChars {
+    if (Test-IsUnicodeTerminal) { return $script:UnicodeBox } else { return $script:AsciiBox }
+}
+
 function Write-Banner {
     param([string]$Version)
-    Write-Host ""
-    Write-Host "  deronode v$Version - DERO node installer & manager" -ForegroundColor Cyan
-    Write-Host ""
+    $b = Get-BoxChars
+    $title = "deronode v$Version"
+    $subtitle = 'DERO node installer & manager'
+    $menuHint = "[ MENU ]  start $($b.MenuDot) stop $($b.MenuDot) status $($b.MenuDot) update $($b.MenuDot) snapshot $($b.MenuDot) restore $($b.MenuDot) quit"
+    $width = [Math]::Min((Get-TerminalWidth), 100)
+    $inner = [Math]::Max(30, $width - 2)
+    $titlePad = [Math]::Max(0, $inner - $title.Length - 4)
+    $subtitlePad = [Math]::Max(0, $inner - $subtitle.Length - 4)
+    $hintPad = [Math]::Max(0, $inner - $menuHint.Length - 4)
+    Write-Host ''
+    Write-Host ($b.TopLeft + ($b.Horiz * $inner) + $b.TopRight) -ForegroundColor Magenta
+    Write-Host ($b.Vert + '  ' + $title + (' ' * $titlePad) + '  ' + $b.Vert) -ForegroundColor White
+    Write-Host ($b.Vert + '  ' + $subtitle + (' ' * $subtitlePad) + '  ' + $b.Vert) -ForegroundColor DarkGray
+    Write-Host ($b.BotLeft + ($b.Horiz * $inner) + $b.BotRight) -ForegroundColor Magenta
+    Write-Host ("  $menuHint") -ForegroundColor DarkGray
+    Write-Host ''
 }
 
 function Read-Ask {

@@ -86,10 +86,11 @@ function Write-NodeStatus {
         $th = [int]$info.topoheight
         $st = [int]$info.stableheight
         $peers = if ($info.incoming_connections_count -ne $null) { $info.incoming_connections_count } else { '?' }
+        $ver = if ($info.version) { ("  derohe " + ([string]$info.version -replace '\+.*$', '')) } else { '' }
         if ($h -ge $th -and $th -gt 0) {
-            Write-Host "  running  height $h/$th  peers $peers" -ForegroundColor Green
+            Write-Host "  running  height $h/$th  peers $peers$ver" -ForegroundColor Green
         } else {
-            Write-Host "  syncing  height $h/$th  stable $st  peers $peers" -ForegroundColor Yellow
+            Write-Host "  syncing  height $h/$th  stable $st  peers $peers$ver" -ForegroundColor Yellow
         }
         $tag = '?'
         if (Test-Path (Join-Path $DerodDir '.tag')) { $tag = (Get-Content (Join-Path $DerodDir '.tag') -Raw).Trim() }

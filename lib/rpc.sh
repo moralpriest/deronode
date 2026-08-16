@@ -85,17 +85,19 @@ external_is_system_unit() {
 
 # print_status <bin> — one-line status line
 print_status() {
-    local bin="$1" info h st th peers tag
+    local bin="$1" info h st th peers ver
     if node_running; then
         info="$(get_node_info)"
         h="$(echo "$info" | jq -r '.height // 0')"
         st="$(echo "$info" | jq -r '.stableheight // 0')"
         th="$(echo "$info" | jq -r '.topoheight // 0')"
         peers="$(echo "$info" | jq -r '.incoming_connections_count // "?"')"
+        ver="$(echo "$info" | jq -r '.version // empty' | sed 's/+.*//')"
+        [ -n "$ver" ] && ver="  derohe $ver"
         if [ "$h" -ge "$th" ] && [ "$th" -gt 0 ]; then
-            echo "${C_OK}● running  height $h/$th  peers $peers${C_RESET}"
+            echo "${C_OK}● running  height $h/$th  peers $peers${ver}${C_RESET}"
         else
-            echo "${C_WARN}● syncing  height $h/$th  stable $st  peers $peers${C_RESET}"
+            echo "${C_WARN}● syncing  height $h/$th  stable $st  peers $peers${ver}${C_RESET}"
         fi
         tag="$(cat "$bin/.tag" 2>/dev/null || echo '?')"
         if external_installed; then
