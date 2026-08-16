@@ -249,7 +249,7 @@ configure() {
 # ── Menu ──
 menu() {
     draw_banner
-    if [ ! -f "$BINARY_PATH" ] && ! node_running; then
+    if [ ! -f "$BINARY_PATH" ] && ! node_running && ! external_installed; then
         echo "  No derod installed yet."
         echo ""
         echo "  [1] Configure & install derod"
@@ -311,9 +311,9 @@ cmd_start() {
         print_argv
         exit 0
     fi
-    if node_is_external; then
-        echo "${C_WARN}[!] derod is system-installed (external) — manage it via your system service manager.${C_RESET}" >&2
-        exit 0
+    if external_installed; then
+        external_start
+        return $?
     fi
     [ -f "$CONFIG_FILE" ] || { echo "${C_INFO}[*] No config yet — running first-run setup.${C_RESET}" >&2; configure; }
     ensure_binary || exit 1
@@ -328,25 +328,54 @@ cmd_start() {
 }
 
 cmd_stop() {
-    if node_is_external; then
+    if external_installed; then
         external_stop
         return $?
     fi
     service_stop
 }
 
+# external_start — start a system-installed (external) derod via its systemd
+# unit (sudo when system-level). No-op when already running. Never downloads or
+# spawns a managed derod.
+external_start() {
+    local unit
+    if node_running; then
+        unit="$(external_unit || echo derod.service)"
+        echo "${C_INFO}[*] external derod already running ($unit)${C_RESET}" >&2
+        return 0
+    fi
+    unit="$(external_unit)" || { echo "${C_ERR}[x] No external derod unit found${C_RESET}" >&2; return 1; }
+    echo "${C_INFO}[*] starting $unit...${C_RESET}" >&2
+    if external_is_system_unit; then
+        if sudo -n systemctl start "$unit" 2>/dev/null; then
+            echo "${C_OK}[*] $unit started${C_RESET}" >&2
+            return 0
+        fi
+        if [ -t 0 ] && sudo systemctl start "$unit"; then
+            echo "${C_OK}[*] $unit started${C_RESET}" >&2
+            return 0
+        fi
+        echo "${C_WARN}[!] could not start $unit (needs sudo) — run: sudo systemctl start $unit${C_RESET}" >&2
+        return 1
+    fi
+    if systemctl --user start "$unit" 2>/dev/null; then
+        echo "${C_OK}[*] $unit started${C_RESET}" >&2
+        return 0
+    fi
+    echo "${C_WARN}[!] could not start $unit — run: systemctl --user start $unit${C_RESET}" >&2
+    return 1
+}
+
 # external_stop — stop a system-installed (external) derod: resolve its unit
-# from the cgroup and stop via systemd (sudo when system-level), else kill the
-# bare process directly.
+# and stop via systemd (sudo when system-level), else kill the bare process
+# directly. Works whether the node is running or already stopped.
 external_stop() {
-    local pid unit cgroup svc
-    pid="$(pgrep -f 'derod-linux-amd64 --fastsync' | head -1)"
-    [ -n "$pid" ] || { echo "${C_ERR}[x] No running derod process found${C_RESET}" >&2; return 1; }
-    cgroup="$(grep '\.service$' "/proc/$pid/cgroup" 2>/dev/null | head -1)"
-    unit="${cgroup##*/}"
+    local unit pid
+    unit="$(external_unit)"
     if [ -n "$unit" ]; then
         echo "${C_INFO}[*] stopping $unit...${C_RESET}" >&2
-        if [ "${cgroup#*/system.slice/}" != "$cgroup" ]; then
+        if external_is_system_unit; then
             if sudo -n systemctl stop "$unit" 2>/dev/null; then
                 echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
                 return 0
@@ -357,16 +386,17 @@ external_stop() {
             fi
             echo "${C_WARN}[!] could not stop $unit (needs sudo) — run: sudo systemctl stop $unit${C_RESET}" >&2
             return 1
-        else
-            if systemctl --user stop "$unit" 2>/dev/null; then
-                echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
-                return 0
-            fi
-            echo "${C_WARN}[!] could not stop $unit — run: systemctl --user stop $unit${C_RESET}" >&2
-            return 1
         fi
+        if systemctl --user stop "$unit" 2>/dev/null; then
+            echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
+            return 0
+        fi
+        echo "${C_WARN}[!] could not stop $unit — run: systemctl --user stop $unit${C_RESET}" >&2
+        return 1
     fi
     # No systemd unit — plain externally-launched process: kill it directly.
+    pid="$(pgrep -f 'derod-linux-amd64 --fastsync' | head -1)"
+    [ -n "$pid" ] || { echo "${C_INFO}[*] no external derod running${C_RESET}" >&2; return 0; }
     kill "$pid" 2>/dev/null
     sleep 1
     if kill -0 "$pid" 2>/dev/null; then
@@ -382,7 +412,7 @@ external_stop() {
 
 cmd_status() {
     draw_banner
-    if node_running || [ -f "$BINARY_PATH" ]; then
+    if node_running || [ -f "$BINARY_PATH" ] || external_installed; then
         print_status "$BIN_DIR/derod"
     else
         echo "${C_MUTE}derod is not installed. Run 'deronode' or 'deronode start'.${C_RESET}"

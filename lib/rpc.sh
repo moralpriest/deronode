@@ -50,6 +50,39 @@ node_is_external() {
     [ "$image" != "$ours" ]
 }
 
+# external_unit — echo the systemd unit name for an externally-installed derod
+# (e.g. derod.service), or nothing when none is installed. Works even when the
+# node is stopped — we detect the *installation*, not a running process.
+external_unit() {
+    local u
+    u="$(systemctl list-unit-files --no-legend --type=service 2>/dev/null | awk '$1 != "deronode.service" && $1 ~ /^derod[^@]*\.service$/ {print $1; exit}')"
+    if [ -n "$u" ]; then
+        echo "$u"
+        return 0
+    fi
+    for f in /etc/systemd/system/derod.service /usr/lib/systemd/system/derod.service; do
+        [ -f "$f" ] && { echo "derod.service"; return 0; }
+    done
+    return 1
+}
+
+# external_installed — true when an external derod installation exists: a derod
+# systemd unit is present, OR a derod is running whose binary is not ours.
+external_installed() {
+    external_unit >/dev/null 2>&1 || node_is_external
+}
+
+# external_is_system_unit — true when the unit lives in the system manager
+# (needs sudo) vs the user manager. Takes the unit name from external_unit.
+external_is_system_unit() {
+    local unit
+    unit="$(external_unit)" || return 1
+    if systemctl --user list-unit-files --no-legend 2>/dev/null | grep -q "^$unit "; then
+        return 1
+    fi
+    return 0
+}
+
 # print_status <bin> — one-line status line
 print_status() {
     local bin="$1" info h st th peers tag
@@ -65,13 +98,19 @@ print_status() {
             echo "${C_WARN}● syncing  height $h/$th  stable $st  peers $peers${C_RESET}"
         fi
         tag="$(cat "$bin/.tag" 2>/dev/null || echo '?')"
-        if [ -f "$bin" ]; then
+        if external_installed; then
+            echo "  derod system-installed (external, not managed by deronode) ($(external_unit))"
+        elif [ -f "$bin" ]; then
             echo "  derod $tag  data: $DATA_DIR_REAL  log: $LOG_DIR_REAL"
         else
             echo "  derod system-installed (external, not managed by deronode)"
         fi
     else
         echo "${C_MUTE}○ stopped${C_RESET}"
-        [ -f "$bin/derod" ] && echo "  derod $(cat "$bin/.tag" 2>/dev/null || echo '?') installed — run 'deronode start'"
+        if external_installed; then
+            echo "  derod system-installed (external) — stopped ($(external_unit))"
+        elif [ -f "$bin/derod" ]; then
+            echo "  derod $(cat "$bin/.tag" 2>/dev/null || echo '?') installed — run 'deronode start'"
+        fi
     fi
 }

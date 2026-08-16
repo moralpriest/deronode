@@ -43,6 +43,40 @@ function Test-ExternalNode {
     return ($image -ne $ours)
 }
 
+# Get-ExternalUnit — the systemd unit name for an externally-installed derod
+# (e.g. derod.service), or $null when none is installed. Works even when the
+# node is stopped — detects the *installation*, not a running process.
+function Get-ExternalUnit {
+    $unit = $null
+    if ($IsLinux -and (Get-Command systemctl -ErrorAction SilentlyContinue)) {
+        $unit = (& systemctl list-unit-files --no-legend --type=service 2>$null |
+            Where-Object { $_ -match '^derod[^@]*\.service\s' -and $_ -notmatch '^deronode\.service' } |
+            ForEach-Object { ($_ -split '\s+')[0] } |
+            Select-Object -First 1)
+    }
+    if (-not $unit) {
+        if ($IsLinux -and (Test-Path '/etc/systemd/system/derod.service')) { $unit = 'derod.service' }
+        elseif ($IsLinux -and (Test-Path '/usr/lib/systemd/system/derod.service')) { $unit = 'derod.service' }
+    }
+    return $unit
+}
+
+# Test-ExternalInstalled — true when an external derod installation exists: a
+# derod systemd unit is present, OR a derod is running whose binary is not ours.
+function Test-ExternalInstalled {
+    if (Get-ExternalUnit) { return $true }
+    return (Test-ExternalNode)
+}
+
+# Test-ExternalSystemUnit — true when the unit lives in the system manager
+# (needs sudo) vs the user manager.
+function Test-ExternalSystemUnit {
+    $unit = Get-ExternalUnit
+    if (-not $unit) { return $true }
+    $userUnits = & systemctl --user list-unit-files --no-legend 2>$null | Where-Object { $_ -match "^$unit " }
+    return -not $userUnits
+}
+
 function Write-NodeStatus {
     param([string]$DerodDir)
     $bin = Join-Path $DerodDir 'derod'
@@ -59,14 +93,18 @@ function Write-NodeStatus {
         }
         $tag = '?'
         if (Test-Path (Join-Path $DerodDir '.tag')) { $tag = (Get-Content (Join-Path $DerodDir '.tag') -Raw).Trim() }
-        if (Test-Path $bin) {
+        if (Test-ExternalInstalled) {
+            Write-Host "  derod system-installed (external, not managed by deronode) ($(Get-ExternalUnit))"
+        } elseif (Test-Path $bin) {
             Write-Host "  derod $tag  data: $($script:DataDirReal)  log: $($script:LogDirReal)"
         } else {
             Write-Host "  derod system-installed (external, not managed by deronode)"
         }
     } else {
         Write-Host "  stopped" -ForegroundColor DarkGray
-        if (Test-Path $bin) {
+        if (Test-ExternalInstalled) {
+            Write-Host "  derod system-installed (external) - stopped ($(Get-ExternalUnit))"
+        } elseif (Test-Path $bin) {
             $tag = (Get-Content (Join-Path $DerodDir '.tag') -Raw).Trim()
             Write-Host "  derod $tag installed - run 'deronode start'"
         }

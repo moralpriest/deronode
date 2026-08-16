@@ -229,7 +229,7 @@ function Ensure-Binary {
 
 function Show-Menu {
     Write-Banner $script:DeronodeVersion
-    if (-not (Test-Path $script:BinaryPath) -and -not (Test-NodeRunning)) {
+    if (-not (Test-Path $script:BinaryPath) -and -not (Test-NodeRunning) -and -not (Test-ExternalInstalled)) {
         Write-Host '  No derod installed yet.'
         Write-Host ''
         Write-Host '  [1] Configure & install derod'
@@ -279,9 +279,9 @@ function Start-Node {
         Write-Host "  $($script:BinaryPath) $($argv -join ' ')"
         exit 0
     }
-    if (Test-ExternalNode) {
-        Write-Host '[!] derod is system-installed (external) - manage it via your system service manager.' -ForegroundColor Yellow
-        exit 0
+    if (Test-ExternalInstalled) {
+        Start-ExternalNode
+        return
     }
     if (-not (Test-Path $script:ConfigFile)) { Configure }
     if (-not (Ensure-Binary)) { exit 1 }
@@ -297,27 +297,48 @@ function Start-Node {
 }
 
 function Stop-Node {
-    if (Test-ExternalNode) {
+    if (Test-ExternalInstalled) {
         Stop-ExternalNode
         return
     }
     Stop-Service
 }
 
-# Stop-ExternalNode — stop a system-installed (external) derod: resolve its unit
-# from the cgroup and stop via systemd (sudo when system-level), else kill the
-# bare process directly.
-function Stop-ExternalNode {
-    $proc = Get-ProcessTable | Where-Object { $_.Name -like 'derod*' } | Select-Object -First 1
-    if (-not $proc) { Write-Host '[x] No running derod process found' -ForegroundColor Red; exit 1 }
-    $cgroup = $null
-    if ($IsLinux) {
-        $cgroup = Get-Content "/proc/$($proc.Pid)/cgroup" -ErrorAction SilentlyContinue | Where-Object { $_ -match '\.service$' } | Select-Object -First 1
+# Start-ExternalNode — start a system-installed (external) derod via its systemd
+# unit (sudo when system-level). No-op when already running.
+function Start-ExternalNode {
+    $unit = Get-ExternalUnit
+    if (Test-NodeRunning) {
+        if (-not $unit) { $unit = 'derod.service' }
+        Write-Host "[*] external derod already running ($unit)" -ForegroundColor DarkCyan
+        return
     }
-    $unit = if ($cgroup) { ($cgroup -split '/')[-1] } else { $null }
+    if (-not $unit) { Write-Host '[x] No external derod unit found' -ForegroundColor Red; exit 1 }
+    Write-Host "[*] starting $unit..." -ForegroundColor DarkCyan
+    if (Test-ExternalSystemUnit) {
+        & sudo -n systemctl start $unit 2>$null
+        if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit started" -ForegroundColor Green; return }
+        if (-not [Console]::IsInputRedirected) {
+            & sudo systemctl start $unit
+            if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit started" -ForegroundColor Green; return }
+        }
+        Write-Host "[!] could not start $unit (needs sudo) - run: sudo systemctl start $unit" -ForegroundColor Yellow
+        exit 1
+    }
+    & systemctl --user start $unit 2>$null
+    if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit started" -ForegroundColor Green; return }
+    Write-Host "[!] could not start $unit - run: systemctl --user start $unit" -ForegroundColor Yellow
+    exit 1
+}
+
+# Stop-ExternalNode — stop a system-installed (external) derod: resolve its unit
+# and stop via systemd (sudo when system-level), else kill the bare process
+# directly. Works whether the node is running or already stopped.
+function Stop-ExternalNode {
+    $unit = Get-ExternalUnit
     if ($unit) {
         Write-Host "[*] stopping $unit..." -ForegroundColor DarkCyan
-        if ($cgroup -match '/system\.slice/') {
+        if (Test-ExternalSystemUnit) {
             & sudo -n systemctl stop $unit 2>$null
             if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
             if (-not [Console]::IsInputRedirected) {
@@ -326,13 +347,14 @@ function Stop-ExternalNode {
             }
             Write-Host "[!] could not stop $unit (needs sudo) - run: sudo systemctl stop $unit" -ForegroundColor Yellow
             exit 1
-        } else {
-            & systemctl --user stop $unit 2>$null
-            if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
-            Write-Host "[!] could not stop $unit - run: systemctl --user stop $unit" -ForegroundColor Yellow
-            exit 1
         }
+        & systemctl --user stop $unit 2>$null
+        if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
+        Write-Host "[!] could not stop $unit - run: systemctl --user stop $unit" -ForegroundColor Yellow
+        exit 1
     }
+    $proc = Get-ProcessTable | Where-Object { $_.Name -like 'derod*' } | Select-Object -First 1
+    if (-not $proc) { Write-Host '[*] no external derod running' -ForegroundColor DarkGray; return }
     Stop-Process -Id $proc.Pid -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 500
     if (Get-Process -Id $proc.Pid -ErrorAction SilentlyContinue) {
@@ -343,7 +365,7 @@ function Stop-ExternalNode {
 }
 function Show-Status {
     Write-Banner $script:DeronodeVersion
-    if ((Test-NodeRunning) -or (Test-Path $script:BinaryPath)) {
+    if ((Test-NodeRunning) -or (Test-Path $script:BinaryPath) -or (Test-ExternalInstalled)) {
         Write-NodeStatus (Join-Path $script:BinDir 'derod')
     } else {
         Write-Host "  derod is not installed. Run 'deronode' or 'deronode start'." -ForegroundColor DarkGray
