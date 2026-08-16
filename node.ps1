@@ -378,6 +378,12 @@ function Update-Node {
     $tagfile = Join-Path $script:BinDir 'derod/.tag'
     if (Test-Path $tagfile) { $old = (Get-Content $tagfile -Raw).Trim() }
     if (Test-CacheFresh) { Write-Host "[*] Already at latest ($($script:LastTag))." -ForegroundColor Green; return }
+    $runRel = Get-DaemonReleaseNumber
+    $latestRel = if ($script:LastTag -match '(\d+)$') { $matches[1] } else { '' }
+    if ($runRel -and $latestRel -and $runRel -eq $latestRel) {
+        Write-Host "[*] Already at latest ($($script:LastTag))." -ForegroundColor Green
+        return
+    }
     Write-Host "[*] Updating derod $old -> $($script:LastTag)" -ForegroundColor DarkCyan
     if (Test-ExternalNode) {
         Update-ExternalNode
@@ -404,7 +410,15 @@ function Update-ExternalNode {
     $ts = Get-Date -Format 'yyyyMMdd_HHmmss'
     Copy-Item $bin "$bin.bak-$ts" -Force -ErrorAction Stop
     Write-Host "[*] backed up $bin -> $bin.bak-$ts" -ForegroundColor DarkCyan
-    Copy-Item $script:BinaryPath $bin -Force
+    $tmp = "$bin.new-$ts"
+    try {
+        Copy-Item $script:BinaryPath $tmp -Force -ErrorAction Stop
+        Move-Item -Force $tmp $bin
+    } catch {
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+        Write-Host "[x] Replace failed: $bin ($($_.Exception.Message))" -ForegroundColor Red
+        exit 1
+    }
     if ($IsWindows) { } else { & chmod +x $bin }
     Write-Host "[*] replaced $bin with $($script:LastTag)" -ForegroundColor Green
 

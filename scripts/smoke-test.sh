@@ -340,6 +340,42 @@ if [ "${DERONODE_LIVE:-0}" = "1" ]; then
     rm -f "$LIVECFG"
 fi
 
+# 13. Running daemon at latest skips download (network-stubbed)
+echo ""
+echo "13. Update skips when running daemon is at latest:"
+eval "$(sed -n '/^daemon_release_number()/,/^}/p' lib/rpc.sh)"
+eval "$(sed -n '/^cmd_update()/,/^}/p' node.sh)"
+# Stub RPC + release plumbing so the guard short-circuits with no network.
+node_running() { return 0; }
+parse_rpc_endpoint() { :; }
+get_node_info() { printf '%s\n' '{"version":"3.6.0-152.DEROHE.STARGATE+14082026"}'; }
+resolve_release() { LAST_TAG="Release152"; return 0; }
+cached_tag_fresh() { return 1; }
+node_is_external() { return 1; }
+fetch_derod() { echo "FETCH_DEROD_CALLED" >&2; return 0; }
+service_stop() { echo "SERVICE_STOP_CALLED" >&2; return 0; }
+service_install() { echo "SERVICE_INSTALL_CALLED" >&2; return 0; }
+cmd_update_external() { echo "CMD_UPDATE_EXTERNAL_CALLED" >&2; return 1; }
+BIN_DIR="$(mktemp -d)"
+C_OK=''; C_RESET=''; C_INFO=''; C_ERR=''; C_WARN=''
+rel=$(daemon_release_number)
+[ "$rel" = "152" ] && pass "daemon_release_number extracts 152 from 3.6.0-152.DEROHE.STARGATE" || fail "daemon_release_number extracts 152 (got '$rel')"
+if out=$(cmd_update 2>&1); then
+    echo "$out" | grep -q "Already at latest (Release152)" && pass "cmd_update reports Already at latest when running at latest" || fail "cmd_update reports Already at latest when running at latest"
+    echo "$out" | grep -q "Updating derod" && fail "no download when running at latest" || pass "no download when running at latest"
+else
+    fail "cmd_update exits 0 when running at latest (out: $out)"
+fi
+# Guard fails open: a running older release still proceeds to the download path.
+get_node_info() { printf '%s\n' '{"version":"3.6.0-151.DEROHE.STARGATE+14082020"}'; }
+if out=$(cmd_update 2>&1) && echo "$out" | grep -q "Updating derod none -> Release152"; then
+    pass "older running release still updates"
+else
+    fail "older running release still updates (out: $out)"
+fi
+rm -rf "$BIN_DIR"
+unset -f daemon_release_number cmd_update node_running parse_rpc_endpoint get_node_info resolve_release cached_tag_fresh node_is_external fetch_derod service_stop service_install cmd_update_external
+
 echo ""
 echo "=== results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

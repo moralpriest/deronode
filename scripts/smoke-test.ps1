@@ -186,6 +186,21 @@ if (-not (Test-Path (Join-Path $ProjectDir 'drydata'))) { Pass 'no data dir crea
 if (-not (Test-Path $dryCfg)) { Pass 'no config file written' } else { Fail 'no config file written' }
 Remove-Item -Path $dryCfg, (Join-Path $ProjectDir 'bin'), (Join-Path $ProjectDir 'drydata'), (Join-Path $ProjectDir 'drylogs') -Recurse -Force -ErrorAction SilentlyContinue
 
+# 8. Running daemon at latest skips download
+Write-Host ''
+Write-Host '8. Update skips when running daemon is at latest:'
+. (Join-Path $ProjectDir 'lib/rpc.ps1')
+function Test-NodeRunning { return $true }
+function Invoke-RpcCall { return @{ version = '3.6.0-152.DEROHE.STARGATE+14082026' } }
+$rel = Get-DaemonReleaseNumber
+if ($rel -eq '152') { Pass 'Get-DaemonReleaseNumber extracts 152 from version' } else { Fail "Get-DaemonReleaseNumber extracts 152 (got '$rel')" }
+$tag = 'Release152'
+$tagRel = if ($tag -match '(\d+)$') { $matches[1] } else { '' }
+if ($rel -and $tagRel -and $rel -eq $tagRel) { Pass 'running release matches tag -> skip' } else { Fail 'running release matches tag -> skip' }
+$upd = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($upd -match 'Get-DaemonReleaseNumber' -and $upd -match 'runRel -eq \$latestRel') { Pass 'Update-Node guards on running version' } else { Fail 'Update-Node guards on running version' }
+if ($upd -match 'Copy-Item \$script:BinaryPath \$tmp' -and $upd -match 'Move-Item -Force \$tmp \$bin') { Pass 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' } else { Fail 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' }
+
 Write-Host ''
 Write-Host "=== results: $PASS passed, $FAIL failed ==="
 exit $(if ($FAIL -eq 0) { 0 } else { 1 })

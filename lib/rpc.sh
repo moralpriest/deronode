@@ -34,6 +34,18 @@ node_running() {
     [ -n "$(get_node_info 2>/dev/null)" ]
 }
 
+# daemon_release_number — the release number of the running daemon, derived from
+# its DERO.GetInfo version string. A version like "3.6.0-152.DEROHE.STARGATE+..."
+# maps to release 152. Empty when the node is not running or the version has no
+# release component (caller falls through to a normal update in that case).
+daemon_release_number() {
+    node_running || return 0
+    local ver
+    ver="$(get_node_info 2>/dev/null | jq -r '.version // empty' 2>/dev/null)"
+    [ -n "$ver" ] || return 0
+    printf '%s' "$ver" | sed -n 's/.*-\([0-9][0-9]*\)\..*/\1/p'
+}
+
 # node_is_external — true when a derod is running whose binary is NOT the one
 # deronode manages (i.e. system-installed via systemd etc.). Robust to deronode
 # having a previously-downloaded copy in bin/ — we compare the running process

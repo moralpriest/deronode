@@ -21,6 +21,18 @@ function Test-NodeRunning {
     return $null -ne (Invoke-RpcCall 'DERO.GetInfo')
 }
 
+# Get-DaemonReleaseNumber — release number of the running daemon, derived from
+# its DERO.GetInfo version string ("3.6.0-152.DEROHE.STARGATE+..." -> "152").
+# Empty when the node is not running or the version carries no release component.
+function Get-DaemonReleaseNumber {
+    if (-not (Test-NodeRunning)) { return '' }
+    $info = Invoke-RpcCall 'DERO.GetInfo'
+    if (-not $info -or -not $info.version) { return '' }
+    $m = [regex]::Match([string]$info.version, '-(\d+)\.')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return ''
+}
+
 # Test-ExternalNode — true when a derod is running whose binary is NOT the one
 # deronode manages (system-installed via systemd etc.). Robust to deronode
 # having a previously-downloaded copy in bin/ — compares the running process

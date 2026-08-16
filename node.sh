@@ -428,6 +428,18 @@ cmd_update() {
         echo "${C_OK}[*] Already at latest ($LAST_TAG).${C_RESET}"
         return 0
     fi
+    # If the running daemon already reports the latest release, skip download and
+    # install entirely. This covers externally-managed nodes whose bin/ cache tag
+    # may be stale or absent even though the running binary is current.
+    if [ -n "$LAST_TAG" ]; then
+        local run_rel latest_rel
+        run_rel="$(daemon_release_number)"
+        latest_rel="$(printf '%s' "$LAST_TAG" | grep -oE '[0-9]+$' | head -1)"
+        if [ -n "$run_rel" ] && [ -n "$latest_rel" ] && [ "$run_rel" = "$latest_rel" ]; then
+            echo "${C_OK}[*] Already at latest ($LAST_TAG).${C_RESET}"
+            return 0
+        fi
+    fi
     echo "${C_INFO}[*] Updating derod $old -> $LAST_TAG${C_RESET}"
     if node_is_external; then
         cmd_update_external || exit 1
