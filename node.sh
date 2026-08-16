@@ -286,7 +286,7 @@ menu() {
             3) ACTION=stop; return ;;
             4) ACTION=status; return ;;
             5) ACTION=update; return ;;
-            6) RECONFIGURE=true; return ;;
+            6) ACTION=reconfigure; return ;;
             7) ACTION=start; DRY_RUN=true; return ;;
             8) ACTION=snapshot; return ;;
             9) ACTION=restore; return ;;
@@ -535,5 +535,6 @@ case "$ACTION" in
                      update)  cmd_update ;;
                      snapshot) cmd_snapshot ;;
                      restore) cmd_restore ;;
+                     reconfigure) cmd_reconfigure ;;
                  esac ;;
 esac

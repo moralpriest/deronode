@@ -201,6 +201,13 @@ $upd = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($upd -match 'Get-DaemonReleaseNumber' -and $upd -match 'runRel -eq \$latestRel') { Pass 'Update-Node guards on running version' } else { Fail 'Update-Node guards on running version' }
 if ($upd -match 'Copy-Item \$script:BinaryPath \$tmp' -and $upd -match 'Move-Item -Force \$tmp \$bin') { Pass 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' } else { Fail 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' }
 
+# 9. Menu option 6 (reconfigure) is dispatched after the menu
+Write-Host ''
+Write-Host '9. Menu reconfigure dispatch:'
+$menuSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($menuSrc -match '''6'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 6 sets Action=reconfigure" } else { Fail "menu option 6 sets Action=reconfigure" }
+if ($menuSrc -match "'reconfigure' \{ Reconfigure-Node \}") { Pass "post-menu switch dispatches reconfigure" } else { Fail "post-menu switch dispatches reconfigure" }
+
 Write-Host ''
 Write-Host "=== results: $PASS passed, $FAIL failed ==="
 exit $(if ($FAIL -eq 0) { 0 } else { 1 })

@@ -260,7 +260,7 @@ function Show-Menu {
             '3' { $script:Action = 'stop'; return }
             '4' { $script:Action = 'status'; return }
             '5' { $script:Action = 'update'; return }
-            '6' { $script:Reconfigure = $true; return }
+            '6' { $script:Action = 'reconfigure'; return }
             '7' { $script:Action = 'start'; $script:DryRun = $true; return }
             '8' { $script:Action = 'snapshot'; return }
             '9' { $script:Action = 'restore'; return }
@@ -476,6 +476,7 @@ switch ($script:Action) {
             'update' { Update-Node }
             'snapshot' { Invoke-Snapshot }
             'restore' { Invoke-Restore }
+            'reconfigure' { Reconfigure-Node }
         }
     }
 }

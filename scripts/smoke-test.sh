@@ -376,6 +376,14 @@ fi
 rm -rf "$BIN_DIR"
 unset -f daemon_release_number cmd_update node_running parse_rpc_endpoint get_node_info resolve_release cached_tag_fresh node_is_external fetch_derod service_stop service_install cmd_update_external
 
+# 14. Menu option 6 (reconfigure) is dispatched after the menu
+echo ""
+echo "14. Menu reconfigure dispatch:"
+menu_src="$(sed -n '/^menu()/,/^}/p' node.sh)"
+echo "$menu_src" | grep -q '6) ACTION=reconfigure' && pass "menu option 6 sets ACTION=reconfigure" || fail "menu option 6 sets ACTION=reconfigure"
+entry_src="$(sed -n '/^case "\$ACTION" in/,$p' node.sh)"
+echo "$entry_src" | grep -q 'reconfigure) cmd_reconfigure ;;' && pass "post-menu case dispatches reconfigure" || fail "post-menu case dispatches reconfigure"
+
 echo ""
 echo "=== results: $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]
