@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DERONODE_VERSION="1.0.0"
+DERONODE_VERSION="1.1.0"
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$PROJECT_DIR/lib"
@@ -364,18 +364,21 @@ cmd_start() {
     [ -f "$CONFIG_FILE" ] || { echo "${C_INFO}[*] No config yet — running first-run setup.${C_RESET}" >&2; configure; }
     ensure_binary || exit 1
     apply_testnet_defaults
-    build_derod_argv
     mkdir -p "$DATA_DIR_REAL" "$LOG_DIR_REAL"
     if $AS_SERVICE; then
+        # service_install builds the argv itself (and short-circuits with
+        # "already configured and running" before that), so the fastsync/prune
+        # warnings don't print for a no-op.
         service_install
+        return $?
+    fi
+    build_derod_argv
+    # From the menu, run derod as a child so the menu is shown again once
+    # the node exits. Plain CLI start keeps exec (exit code propagation).
+    if $MENU_MODE; then
+        "$BINARY_PATH" "${DEROD_ARGV[@]}" || true
     else
-        # From the menu, run derod as a child so the menu is shown again once
-        # the node exits. Plain CLI start keeps exec (exit code propagation).
-        if $MENU_MODE; then
-            "$BINARY_PATH" "${DEROD_ARGV[@]}" || true
-        else
-            exec "$BINARY_PATH" "${DEROD_ARGV[@]}"
-        fi
+        exec "$BINARY_PATH" "${DEROD_ARGV[@]}"
     fi
 }
 

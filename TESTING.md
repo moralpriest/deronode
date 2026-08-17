@@ -13,8 +13,8 @@ explicitly stop it first.
 cd ~/Projects/deronode
 
 # Full smoke suites — self-contained, wipe and recreate their own bin/
-bash scripts/smoke-test.sh              # expect: 157 passed, 0 failed
-pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 130 passed, 0 failed
+bash scripts/smoke-test.sh              # expect: 169 passed, 0 failed
+pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 141 passed, 0 failed
 
 # Dry-run — offline proof: prints the exact derod argv, writes nothing
 bash node.sh --dry-run --sync-profile=pruned --data-dir=/tmp/d1 --log-dir=/tmp/d2
@@ -182,6 +182,34 @@ flag, so the node is installed as a systemd user unit (Linux), LaunchAgent
 via `deronode start --service`. The first-run and reconfigure continuations
 into `start` carry the answer through. (Sections 14 bash / 9 ps cover the
 question + that first-run keeps the choice.)
+
+Service install under PowerShell is portable to Linux: `Write-RunWrapper`
+writes `run-derod.ps1` with a `#!/usr/bin/env pwsh` shebang + exec bit (no
+`status=203/EXEC`) and splats the argv (`@derodArgs`) instead of a comma list,
+which derod rejects with its usage screen. `Start-Background` only passes
+`-WindowStyle` on Windows — PowerShell on Linux/macOS rejects the parameter —
+and only writes `derod.pid` when a pid actually exists (a crashed start must
+not leave a stale empty pid file that the running-guards treat as "running").
+`Get-ServiceBackend`/`service_backend` keep systemd for `degraded` sessions (a
+failed *unrelated* unit must not demote to the pid fallback); only an
+unreachable/offline bus falls back. `systemctl --user start` failures are now
+surfaced with a `journalctl --user -u deronode.service` hint instead of
+printing success. (Section 1 ps greps the wrapper/backend wiring; 13c bash
+stub-tests the backend detection.)
+
+Service install is idempotent and quiet: when the unit file already exists,
+`start --service` reports `deronode.service is already configured and running`
+(or `... - starting it` when the unit is installed but stopped) instead of
+re-installing. The macOS LaunchAgent gets the same treatment
+(`org.deronode.derod is already configured...`), detected via `launchctl list`.
+(13c bash + section 1 ps grep the launchd branch.) `Install-Service`/`service_install` check that state *before*
+building the wrapper, so the fastsync/prune warnings don't print for a no-op
+— and the argv is built there (not in `Start-Node`/`cmd_start`), so a service
+start prints them once and only when it actually installs. Building the argv
+inside `service_install` also fixes the update/build/snapshot restart paths,
+which previously wrote the wrapper with a stale/empty argv. (Section 13d bash
+stub-tests the three branches: running, stopped, not installed; section 1 ps
+greps the wiring.)
 
 Archive cache: `fetch_derod`/`Invoke-FetchDerod` keep the downloaded release
 archive under `bin/archives/<tag>/` instead of deleting it after install. A

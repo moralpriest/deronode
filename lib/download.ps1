@@ -88,6 +88,16 @@ function Find-DerodBinary {
     return $cand
 }
 
+# Keep only the newest $Keep timestamped binary backups (derod.bak-*); older
+# ones pile up at ~20-45 MB per update. Shared with lib/build.ps1.
+function Prune-DerodBackups {
+    param([string]$Dir, [int]$Keep = 3)
+    Get-ChildItem (Join-Path $Dir 'derod.bak-*') -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        Select-Object -Skip $Keep |
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+}
+
 function Invoke-FetchDerod {
     param([object]$Platform)
     $derodDir = Join-Path $BinDir 'derod'
@@ -147,8 +157,17 @@ function Invoke-FetchDerod {
         $found = Find-DerodBinary $x
         if (-not $found) { throw "derod binary not found in $($script:LastAsset)" }
 
-        Copy-Item $found.FullName (Join-Path $derodDir 'derod') -Force
-        if ($Platform.os -ne 'windows') { & chmod +x (Join-Path $derodDir 'derod') }
+        $old = Join-Path $derodDir 'derod'
+        # Back up the previous binary (timestamped) before replacing it, so an
+        # update is reversible — same pattern as the external-node update path.
+        if (Test-Path $old) {
+            $bak = "$old.bak-$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+            Copy-Item $old $bak -Force
+            Write-Host "[*] backed up previous binary -> $bak" -ForegroundColor DarkCyan
+        }
+        Prune-DerodBackups $derodDir
+        Copy-Item $found.FullName $old -Force
+        if ($Platform.os -ne 'windows') { & chmod +x $old }
         Set-Content (Join-Path $derodDir '.tag') $script:LastTag -NoNewline
         Set-Content (Join-Path $derodDir '.tagtime') ([int][double]::Parse((Get-Date -UFormat %s))) -NoNewline
         Set-Content (Join-Path $derodDir '.asset') $script:LastAsset -NoNewline

@@ -83,6 +83,12 @@ release download) or `--source=dev` (compile the latest community-dev). The
 menu's "Update derod" option asks `1) Latest release (download)` vs
 `2) community-dev source (compile)` before running.
 
+Before replacing the current binary, both update paths (release download and
+source build — plus the external-node path) copy it to
+`derod.bak-YYYYMMDD_HHMMSS` next to the new binary, so a bad update is always
+reversible; the previous binary is never silently destroyed. Only the newest
+3 backups are kept — older `derod.bak-*` files are pruned automatically.
+
 `deronode build` (menu option 6) compiles derod from the latest
 [DEROFDN/derohe](https://github.com/DEROFDN/derohe) **`community-dev`** branch
 with your local Go toolchain (`go build ./cmd/derod`), then installs the binary
@@ -257,6 +263,18 @@ floor (genesis is always kept, so it is excluded). Raise `--prune-history` (or
 - **Node shows `stopped` but you started it with `--service`**: check
   `systemctl --user status deronode` or the log at
   `~/.local/share/deronode/logs/derod.log`.
+- **Service fails under PowerShell on Linux** (`status=203/EXEC`, or a
+  `Start-Process -WindowStyle ... not supported` error): both are fixed — the
+  background wrapper is written with a pwsh shebang + exec bit, and the pid
+  fallback no longer passes `-WindowStyle` off Windows. Just re-run
+  `deronode start --service`; a `degraded` systemd session no longer demotes
+  to the pid fallback either.
+- **`start --service` when it's already a service**: re-running is safe and
+  idempotent — it reports `deronode.service is already configured and running`
+  (or `- starting it` if installed but stopped) instead of re-installing, and
+  it does so without printing the fastsync/prune warnings (nothing is being
+  started). The wrapper is rewritten with the current flags whenever it
+  actually installs or starts.
 - **Sync stuck / slow**: confirm disk space (`df -h`), then `deronode stop`
   and `deronode --prune-history=50000 start --service`.
 - **Fastsync crash `We need atleast 50 blocks to prune`**: this is derod

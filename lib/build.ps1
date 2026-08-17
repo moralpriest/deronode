@@ -95,8 +95,17 @@ function Invoke-BuildDerodFromSource {
 
     $derodDir = Join-Path $script:BinDir 'derod'
     New-Item -ItemType Directory -Path $derodDir -Force | Out-Null
-    Copy-Item $found.FullName (Join-Path $derodDir 'derod') -Force
-    if (-not $script:IsWindows) { & chmod +x (Join-Path $derodDir 'derod') }
+    $old = Join-Path $derodDir 'derod'
+    # Back up the previous binary (timestamped) before replacing it, so a
+    # source build never destroys the previous (e.g. release) binary.
+    if (Test-Path $old) {
+        $bak = "$old.bak-$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+        Copy-Item $old $bak -Force
+        Write-Host "[*] backed up previous binary -> $bak" -ForegroundColor DarkCyan
+    }
+    Prune-DerodBackups $derodDir
+    Copy-Item $found.FullName $old -Force
+    if (-not $script:IsWindows) { & chmod +x $old }
     Set-Content (Join-Path $derodDir '.tag') "community-dev@$($script:DevSha)" -NoNewline
     Set-Content (Join-Path $derodDir '.asset') 'community-dev' -NoNewline
     Set-Content (Join-Path $derodDir '.tagtime') ([int][double]::Parse((Get-Date -UFormat %s))) -NoNewline

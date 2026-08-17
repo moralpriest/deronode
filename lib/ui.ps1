@@ -35,7 +35,7 @@ function Write-Banner {
     $b = Get-BoxChars
     $title = "deronode v$Version"
     $subtitle = 'DERO node installer & manager'
-    $menuHint = "[ MENU ]  start $($b.MenuDot) stop $($b.MenuDot) status $($b.MenuDot) update $($b.MenuDot) snapshot $($b.MenuDot) restore $($b.MenuDot) quit"
+    $menuHint = "[ MENU ]  start $($b.MenuDot) stop $($b.MenuDot) status $($b.MenuDot) update $($b.MenuDot) build $($b.MenuDot) snapshot $($b.MenuDot) restore $($b.MenuDot) resync $($b.MenuDot) logs $($b.MenuDot) quit"
     $width = [Math]::Min((Get-TerminalWidth), 100)
     $inner = [Math]::Max(30, $width - 2)
     $titlePad = [Math]::Max(0, $inner - $title.Length - 4)

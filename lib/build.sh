@@ -72,8 +72,17 @@ build_derod_from_source() {
     fi
 
     mkdir -p "$BIN_DIR/derod"
-    cp -f "$found" "$BIN_DIR/derod/derod"
-    chmod +x "$BIN_DIR/derod/derod"
+    # Back up the previous binary (timestamped) before replacing it, so a
+    # source build never destroys the previous (e.g. release) binary.
+    local old="$BIN_DIR/derod/derod" bak_ts
+    if [ -f "$old" ]; then
+        bak_ts="$(date +%Y%m%d_%H%M%S)"
+        cp -f "$old" "$old.bak-$bak_ts" || { echo "${C_ERR}[x] Backup failed: $old.bak-$bak_ts${C_RESET}" >&2; return 1; }
+        echo "${C_INFO}[*] backed up previous binary -> $old.bak-$bak_ts${C_RESET}" >&2
+    fi
+    prune_derod_backups "$BIN_DIR/derod"
+    cp -f "$found" "$old"
+    chmod +x "$old"
     printf 'community-dev@%s\n' "$DEV_SHA" > "$BIN_DIR/derod/.tag"
     printf 'community-dev\n' > "$BIN_DIR/derod/.asset"
     date +%s > "$BIN_DIR/derod/.tagtime"

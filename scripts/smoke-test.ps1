@@ -44,6 +44,13 @@ if ($ps -match 'Install-PwshIfMissing' -and $ps -match 'Microsoft.PowerShell') {
 $svc = Get-Content (Join-Path $ProjectDir 'lib/service.ps1') -Raw
 if ($svc -match 'PSEdition') { Pass 'service picks pwsh vs powershell by edition' } else { Fail 'service picks pwsh vs powershell by edition' }
 if ($svc -match 'is-system-running') { Pass 'systemd backend requires live user session' } else { Fail 'systemd backend requires live user session' }
+if ($svc -match 'degraded' -and $svc -match 'is-system-running') { Pass 'systemd backend keeps degraded sessions (no pid fallback)' } else { Fail 'systemd backend keeps degraded sessions (no pid fallback)' }
+if ($svc -match 'usr/bin/env pwsh' -and $svc -match 'chmod') { Pass 'run wrapper is executable with pwsh shebang on non-Windows' } else { Fail 'run wrapper is executable with pwsh shebang on non-Windows' }
+if ($svc -match '@derodArgs') { Pass 'run wrapper splats argv (comma list would be one arg)' } else { Fail 'run wrapper splats argv (comma list would be one arg)' }
+if ($svc -match 'WindowStyle' -and $svc -match 'IsWindows') { Pass 'Start-Background only passes -WindowStyle on Windows' } else { Fail 'Start-Background only passes -WindowStyle on Windows' }
+if ($svc -match 'journalctl --user -u deronode.service') { Pass 'systemd start failure is surfaced' } else { Fail 'systemd start failure is surfaced' }
+if ($svc -match 'already configured and running' -and $svc -match 'is-active' -and $svc -match 'return') { Pass 'Install-Service short-circuits before building wrapper' } else { Fail 'Install-Service short-circuits before building wrapper' }
+if ($svc -match 'org\.deronode\.derod is already configured' -and $svc -match 'launchctl list') { Pass 'launchd install is idempotent (PS)' } else { Fail 'launchd install is idempotent (PS)' }
 if ($svc -match 'Get-ProcessTable') { Pass 'pid stop uses portable process table' } else { Fail 'pid stop uses portable process table' }
 
 # 5. Version + help
@@ -368,6 +375,8 @@ if ($upd -match 'Get-DaemonReleaseNumber' -and $upd -match 'runRel -eq \$latestR
 if ($upd -match 'Copy-Item \$script:BinaryPath \$tmp' -and $upd -match 'Move-Item -Force \$tmp \$bin') { Pass 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' } else { Fail 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' }
 $dlPs = Get-Content (Join-Path $ProjectDir 'lib/download.ps1') -Raw
 if ($dlPs -match 'Reusing cached' -and $dlPs -match 'archives' -and $dlPs -match 'cached archive failed checksum') { Pass 'Invoke-FetchDerod caches + reuses the downloaded archive' } else { Fail 'Invoke-FetchDerod caches + reuses the downloaded archive' }
+if ($dlPs -match '\$old\.bak-' -and $dlPs -match 'backed up previous binary') { Pass 'Invoke-FetchDerod backs up previous binary with timestamp' } else { Fail 'Invoke-FetchDerod backs up previous binary with timestamp' }
+if ($dlPs -match 'function Prune-DerodBackups' -and $dlPs -match 'Prune-DerodBackups \$derodDir' -and (Get-Content (Join-Path $ProjectDir 'lib/build.ps1') -Raw) -match 'Prune-DerodBackups \$derodDir') { Pass 'binary backups pruned to newest 3 (download + build)' } else { Fail 'binary backups pruned to newest 3 (download + build)' }
 
 # 9. Menu option 7 (reconfigure) is dispatched after the menu
 Write-Host ''
@@ -392,6 +401,7 @@ if ($bldSrc -match 'Test-GoAvailable' -and $bldSrc -match 'Go toolchain not foun
 $bldLib = Get-Content (Join-Path $ProjectDir 'lib/build.ps1') -Raw
 if ($bldLib -match 'git clone --depth 1 --branch \$script:DevBranch' -and $bldLib -match 'go build -o derod ./cmd/derod' -and $bldLib -match 'community-dev@' -and $bldLib -match 'Test-SourceBuild') { Pass 'lib/build.ps1 clones community-dev + go builds derod + marks source' } else { Fail 'lib/build.ps1 clones community-dev + go builds derod + marks source' }
 if ($bldLib -match 'Find-DerodBinary' -and $bldLib -match 'magic') { Pass 'lib/build.ps1 reuses Find-DerodBinary + magic check' } else { Fail 'lib/build.ps1 reuses Find-DerodBinary + magic check' }
+if ($bldLib -match '\$old\.bak-') { Pass 'lib/build.ps1 backs up previous binary before replacing' } else { Fail 'lib/build.ps1 backs up previous binary before replacing' }
 # source builds are kept by start (Test-CacheFresh) but replaced by update
 if ($dlPs -match 'Test-SourceBuild\) \{ return \$true' -and $bldSrc -match '-not \(Test-SourceBuild\) -and \(Test-CacheFresh\)') { Pass 'start keeps source build; update swaps back to release' } else { Fail 'start keeps source build; update swaps back to release' }
 # update --source=dev routes through the community-dev compile path; menu
@@ -403,6 +413,7 @@ if ($menuSrc -match 'function Invoke-Resync' -and $menuSrc -match 'Get-SnapshotC
 if ($menuSrc -match 'while \(\$true\)' -and $menuSrc -match '\$script:MenuMode = \$true') { Pass 'menu-driven entry loops back to the menu' } else { Fail 'menu-driven entry loops back to the menu' }
 # Start-Node runs derod as a child and returns to the menu in menu mode
 if ($menuSrc -match 'function Start-Node' -and $menuSrc -match '\$script:MenuMode') { Pass 'Start-Node returns to the menu in menu mode' } else { Fail 'Start-Node returns to the menu in menu mode' }
+if ($menuSrc -notmatch 'Install-Service -Argv') { Pass 'Start-Node lets Install-Service build argv (no pre-build warnings)' } else { Fail 'Start-Node lets Install-Service build argv (no pre-build warnings)' }
 # logs command: parse, menu, dispatch, tail selection
 if ($menuSrc -match '''logs'' \{ \$script:Action = ''logs'' \}' -and $menuSrc -match '''12'' \{ \$script:Action = ''logs''; return \}' -and $menuSrc -match '''logs'' \{ Show-Logs \}') { Pass 'logs wired into parse/menu/dispatch' } else { Fail 'logs wired into parse/menu/dispatch' }
 if ($menuSrc -match 'function Show-Logs' -and $menuSrc -match 'Get-Content.*-Wait' -and $menuSrc -match 'derod.out.log') { Pass 'Show-Logs tails derod.log and falls back to out/err captures' } else { Fail 'Show-Logs tails derod.log and falls back to out/err captures' }

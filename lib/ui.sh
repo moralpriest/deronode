@@ -32,7 +32,7 @@ draw_banner() {
     local v="$DERONODE_VERSION"
     local title="deronode v$v"
     local subtitle="DERO node installer & manager"
-    local menu_hint="[ MENU ]  start ${MENU_DOT} stop ${MENU_DOT} status ${MENU_DOT} update ${MENU_DOT} snapshot ${MENU_DOT} restore ${MENU_DOT} quit"
+    local menu_hint="[ MENU ]  start ${MENU_DOT} stop ${MENU_DOT} status ${MENU_DOT} update ${MENU_DOT} build ${MENU_DOT} snapshot ${MENU_DOT} restore ${MENU_DOT} resync ${MENU_DOT} logs ${MENU_DOT} quit"
     local width="${COLUMNS:-80}"
     local inner=$((width - 4)); [ "$inner" -lt 30 ] && inner=30
     local top bot title_pad sub_pad hint_pad

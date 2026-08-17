@@ -19,22 +19,62 @@ write_run_wrapper() {
 }
 
 service_backend() {
-    if [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1 && systemctl --user is-system-running >/dev/null 2>&1; then
-        echo systemd
-    elif [ "$OS" = "darwin" ]; then
-        echo launchd
-    else
-        echo pid
+    if [ "$OS" = "linux" ] && command -v systemctl >/dev/null 2>&1; then
+        local st
+        st="$(systemctl --user is-system-running 2>/dev/null)"
+        # "running" (exit 0) and "degraded" (exit 1) both mean the user manager
+        # is up and can start units — a failed *unrelated* unit must not demote
+        # us to the pid fallback. Only an unreachable/offline bus does.
+        case "$st" in
+            running|degraded|starting|maintenance) echo systemd ;;
+            *) echo pid ;;
+        esac
+        return
     fi
+    [ "$OS" = "darwin" ] && { echo launchd; return; }
+    echo pid
 }
 
 service_install() {
-    write_run_wrapper
     local backend
     backend="$(service_backend)"
+    # Already configured and running: nothing to do — report it without even
+    # building the argv, so the fastsync/prune warnings don't print for a no-op.
+    case "$backend" in
+        systemd)
+            if [ -f "$HOME/.config/systemd/user/deronode.service" ] \
+               && systemctl --user is-active deronode.service >/dev/null 2>&1; then
+                echo "${C_OK}[*] deronode.service is already configured and running${C_RESET}"
+                return 0
+            fi
+            ;;
+        launchd)
+            if [ -f "$HOME/Library/LaunchAgents/org.deronode.derod.plist" ] \
+               && launchctl list 2>/dev/null | grep -q 'org.deronode.derod'; then
+                echo "${C_OK}[*] org.deronode.derod is already configured and running${C_RESET}"
+                return 0
+            fi
+            ;;
+    esac
+    # Build the argv + wrapper here (not in the callers) so update/build/snapshot
+    # restarts get a wrapper with the real flags, and warnings print exactly once.
+    apply_testnet_defaults
+    build_derod_argv
+    write_run_wrapper
     case "$backend" in
         systemd)
             local unit="$HOME/.config/systemd/user/deronode.service"
+            if [ -f "$unit" ]; then
+                # Idempotent: the unit is already configured but not running —
+                # just start it (the wrapper above already embeds the argv).
+                echo "${C_MUTE}[*] deronode.service is already configured - starting it${C_RESET}"
+                if systemctl --user start deronode.service >/dev/null 2>&1; then
+                    echo "${C_OK}[*] started deronode.service${C_RESET}"
+                else
+                    echo "${C_ERR}[!] systemctl --user start failed - check 'journalctl --user -u deronode.service'${C_RESET}" >&2
+                fi
+                return 0
+            fi
             mkdir -p "$(dirname "$unit")"
             cat > "$unit" <<EOF
 [Unit]
@@ -57,6 +97,8 @@ EOF
             ;;
         launchd)
             local plist="$HOME/Library/LaunchAgents/org.deronode.derod.plist"
+            local existed=0
+            [ -f "$plist" ] && existed=1
             mkdir -p "$(dirname "$plist")"
             cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -75,7 +117,11 @@ EOF
 EOF
             launchctl unload "$plist" >/dev/null 2>&1 || true
             launchctl load "$plist" >/dev/null 2>&1 || true
-            echo "${C_OK}[*] installed + started LaunchAgent org.deronode.derod${C_RESET}"
+            if [ "$existed" = "1" ]; then
+                echo "${C_MUTE}[*] org.deronode.derod is already configured - starting it${C_RESET}"
+            else
+                echo "${C_OK}[*] installed + started LaunchAgent org.deronode.derod${C_RESET}"
+            fi
             ;;
         *)
             start_pid

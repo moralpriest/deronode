@@ -1,6 +1,6 @@
 # node.ps1 — deronode runner (PowerShell 7 / 5.1). Mirrors node.sh's CLI.
 
-$script:DeronodeVersion = '1.0.0'
+$script:DeronodeVersion = '1.1.0'
 $script:InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:LibDir = Join-Path $script:InstallDir 'lib'
 $script:BinDir = Join-Path $script:InstallDir 'bin'
@@ -327,17 +327,20 @@ function Start-Node {
     if (-not (Test-Path $script:ConfigFile)) { Configure }
     if (-not (Ensure-Binary)) { exit 1 }
     Apply-TestnetDefaults
-    $argv = Build-DerodArgv
     New-Item -ItemType Directory -Path $script:DataDirReal, $script:LogDirReal -Force | Out-Null
     if ($script:AsService) {
+        # Install-Service builds the argv itself (and short-circuits with
+        # "already configured and running" before that), so the fastsync/prune
+        # warnings don't print for a no-op.
         Install-Service
-    } else {
-        # From the menu, run derod as a child so the menu is shown again once
-        # the node exits. Plain CLI start keeps the exit code.
-        & $script:BinaryPath @argv
-        if ($script:MenuMode) { return }
-        exit $LASTEXITCODE
+        return
     }
+    $argv = Build-DerodArgv
+    # From the menu, run derod as a child so the menu is shown again once
+    # the node exits. Plain CLI start keeps the exit code.
+    & $script:BinaryPath @argv
+    if ($script:MenuMode) { return }
+    exit $LASTEXITCODE
 }
 
 function Stop-Node {

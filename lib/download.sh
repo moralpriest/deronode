@@ -80,6 +80,18 @@ find_derod_in() {
     find "$dir" -type f -name 'derod*' 2>/dev/null | head -1
 }
 
+# Keep only the newest $keep timestamped binary backups (derod.bak-*); older
+# ones pile up at ~20-45 MB per update. Shared with lib/build.sh. Sorted by
+# NAME (the YYYYMMDD_HHMMSS stamps are monotonic in the filename) so it is
+# deterministic regardless of mtime ties. Safe to run with no backups present
+# (ls error swallowed + pipeline guarded for pipefail).
+prune_derod_backups() {
+    local dir="$1" keep="${2:-3}" f
+    if [ -d "$dir" ]; then
+        ls -1 "$dir"/derod.bak-* 2>/dev/null | sort -r | tail -n +$((keep + 1)) | while read -r f; do [ -n "$f" ] && rm -f "$f"; done || true
+    fi
+}
+
 # Download + verify + extract + lift the daemon into bin/derod/derod.
 # The archive is kept in bin/archives/<tag>/ so an already-downloaded release
 # is not fetched again: a later install of the same tag reuses the cached file
@@ -153,8 +165,17 @@ fetch_derod() {
         return 1
     fi
 
-    cp -f "$found" "$BIN_DIR/derod/derod"
-    chmod +x "$BIN_DIR/derod/derod"
+    # Back up the previous binary (timestamped) before replacing it, so an
+    # update is reversible — same pattern as the external-node update path.
+    local old="$BIN_DIR/derod/derod" bak_ts
+    if [ -f "$old" ]; then
+        bak_ts="$(date +%Y%m%d_%H%M%S)"
+        cp -f "$old" "$old.bak-$bak_ts" || { rm -rf "$tmp"; echo "${C_ERR}[x] Backup failed: $old.bak-$bak_ts${C_RESET}" >&2; return 1; }
+        echo "${C_INFO}[*] backed up previous binary -> $old.bak-$bak_ts${C_RESET}" >&2
+    fi
+    prune_derod_backups "$BIN_DIR/derod"
+    cp -f "$found" "$old"
+    chmod +x "$old"
     printf '%s\n' "$LAST_TAG" > "$BIN_DIR/derod/.tag"
     date +%s > "$BIN_DIR/derod/.tagtime"
     printf '%s\n' "$LAST_ASSET" > "$BIN_DIR/derod/.asset"

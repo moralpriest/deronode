@@ -77,6 +77,16 @@ if [[ "$bash_ver" =~ ^deronode\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 else
     fail "bash runner --version prints '$bash_ver'"
 fi
+if grep -q 'DERONODE_VERSION="1.1.0"' node.sh && grep -q "DeronodeVersion = '1.1.0'" node.ps1; then
+    pass "version is 1.1.0 in both runners"
+else
+    fail "version is 1.1.0 in both runners"
+fi
+if grep -q 'resync' lib/ui.sh && grep -q 'logs' lib/ui.sh && grep -q 'build' lib/ui.ps1 && grep -q 'resync' lib/ui.ps1; then
+    pass "menu hint lists build/resync/logs (both UIs)"
+else
+    fail "menu hint lists build/resync/logs (both UIs)"
+fi
 bash_help=$(bash ./node.sh --help 2>&1)
 for token in "--integrator-address" "--sync-profile" "--getwork-bind" "--data-dir" "--log-dir" "--rpc-bind" "--p2p-bind" "--prune-history" "--add-priority-node" "--add-exclusive-node" "--socks-proxy" "--clog-level" "--flog-level" "--testnet" "--time-is-in-sync" "--extra-arg" "--config=" "--source=" "derod only" "snapshot" "restore" "build" "community-dev" "--level" "--max-ratio" "--out" "--keep-running" "--from" "--yes"; do
     if [[ "$bash_help" != *"$token"* ]]; then fail "help documents '$token'"; else pass "help documents '$token'"; fi
@@ -261,7 +271,7 @@ if grep -q 'json_rpc' "$PROJECT_DIR/lib/rpc.sh"; then pass "rpc_call targets /js
 eval "$(sed -n '/^catalog_os()/,/^}/p' lib/platform.sh)"
 eval "$(sed -n '/^catalog_arch()/,/^}/p' lib/platform.sh)"
 eval "$(sed -n '/^resolve_release()/,/^}/p' lib/download.sh)"
-DERONODE_VERSION="1.0.0"
+DERONODE_VERSION="1.1.0"
 GH_DL="https://github.com/DEROFDN/derohe/releases/download"
 REPO="DEROFDN/derohe"
 # Stub curl: fake the GitHub releases/latest redirect so this test needs no network.
@@ -318,8 +328,10 @@ source "$LIB_DIR/config.sh"
 source "$LIB_DIR/ui.sh"
 source "$LIB_DIR/rpc.sh"
 source "$LIB_DIR/snapshot.sh"
-# Isolate the offline fixture from any real external install on this machine.
+# Isolate the offline fixture from any real external install on this machine
+# (including a stale derod.pid a crashed start may have left behind).
 external_installed() { return 1; }
+rm -f "$PROJECT_DIR/derod.pid"
 SNAPFIX="$(mktemp -d)"
 SNAPCHAIN="$SNAPFIX/chain"
 mkdir -p "$SNAPCHAIN/balances/ab" "$SNAPCHAIN/bltx_store/b1"
@@ -593,8 +605,106 @@ if [ "$DLCOUNT" = "2" ] && echo "$out" | grep -q "cached archive failed checksum
 else
     fail "corrupt cached archive is re-downloaded (count=$DLCOUNT out: $(tr '\n' ' ' <<<"$out"))"
 fi
+# A timestamped .bak of the previous binary is kept before replacing it.
+rm -f "$BIN_DIR/derod"/derod.bak-*
+if fetch_derod 2>/dev/null && [ -n "$(ls "$BIN_DIR/derod"/derod.bak-* 2>/dev/null | head -1)" ] && [ -f "$BIN_DIR/derod/derod" ]; then
+    pass "update backs up previous binary with timestamp (.bak)"
+else
+    fail "update backs up previous binary with timestamp (.bak)"
+fi
+# Only the newest 3 binary backups are kept; older ones are pruned.
+eval "$(sed -n '/^prune_derod_backups()/,/^}/p' lib/download.sh)"
+PDIR="$(mktemp -d)"
+for t in 20260101_000000 20260201_000000 20260301_000000 20260401_000000 20260501_000000; do
+    touch "$PDIR/derod.bak-$t"
+done
+prune_derod_backups "$PDIR"
+if [ "$(ls "$PDIR"/derod.bak-* | wc -l | tr -d ' ')" = "3" ] \
+   && [ -f "$PDIR/derod.bak-20260501_000000" ] && [ ! -f "$PDIR/derod.bak-20260101_000000" ]; then
+    pass "binary backups pruned to newest 3"
+else
+    fail "binary backups pruned to newest 3"
+fi
+rm -rf "$PDIR"; unset -f prune_derod_backups
 rm -rf "$FAKEDIR" "$CACHEBIN"; rm -f "$CACHEOUT"
 unset -f fetch_derod resolve_release verify_checksum find_derod_in cached_tag_fresh stub_curl curl
+
+# 13c. Service backend detection: a degraded systemd session still uses systemd
+# (a failed unrelated unit must not demote to the pid fallback); only an
+# unreachable bus falls back.
+echo ""
+echo "13c. Service backend detection:"
+eval "$(sed -n '/^service_backend()/,/^}/p' lib/service.sh)"
+OS=linux
+systemctl() { echo "degraded"; return 1; }
+if [ "$(service_backend)" = "systemd" ]; then
+    pass "degraded systemd session still selects systemd"
+else
+    fail "degraded systemd session still selects systemd (got $(service_backend))"
+fi
+systemctl() { echo "Failed to connect to bus: No such file or directory" >&2; return 1; }
+if [ "$(service_backend)" = "pid" ]; then
+    pass "unreachable systemd bus falls back to pid"
+else
+    fail "unreachable systemd bus falls back to pid (got $(service_backend))"
+fi
+if grep -q 'org.deronode.derod is already configured and running' lib/service.sh \
+   && grep -q 'launchctl list' lib/service.sh; then
+    pass "launchd install is idempotent (already-configured message)"
+else
+    fail "launchd install is idempotent (already-configured message)"
+fi
+OS=darwin
+if [ "$(service_backend)" = "launchd" ]; then
+    pass "darwin selects launchd"
+else
+    fail "darwin selects launchd (got $(service_backend))"
+fi
+unset -f systemctl service_backend
+
+# 13d. Service install idempotency: an already-configured unit is reported, not
+# reinstalled; only a stopped-but-installed unit gets started.
+eval "$(sed -n '/^service_install()/,/^}/p' lib/service.sh)"
+write_run_wrapper() { :; }
+service_backend() { echo systemd; }
+apply_testnet_defaults() { :; }
+build_derod_argv() { :; }
+INSTALL_DIR="$PROJECT_DIR"
+C_OK=''; C_MUTE=''; C_ERR=''; C_RESET=''
+SVDIR="$(mktemp -d)"
+SVHOME_SAVE="$HOME"; HOME="$SVDIR"
+mkdir -p "$SVDIR/.config/systemd/user"
+SVCORDER="$(mktemp)"
+# installed + active -> reports already-configured, no start/reload calls
+systemctl() { echo "systemctl $*" >> "$SVCORDER"; [ "$2" = "is-active" ]; }
+: > "$SVDIR/.config/systemd/user/deronode.service"
+out="$(service_install 2>&1)"
+if echo "$out" | grep -q "already configured and running" && ! grep -q 'start deronode' "$SVCORDER"; then
+    pass "installed + running unit: reports already configured, no reinstall"
+else
+    fail "installed + running unit: reports already configured, no reinstall (out: $out calls: $(tr '\n' ' ' < "$SVCORDER"))"
+fi
+# installed + stopped -> starts it, no daemon-reload
+: > "$SVCORDER"
+systemctl() { echo "systemctl $*" >> "$SVCORDER"; if [ "$2" = "is-active" ]; then return 1; fi; [ "$2" = "start" ]; }
+out="$(service_install 2>&1)"
+if echo "$out" | grep -q "already configured - starting" && grep -q 'start deronode' "$SVCORDER" && ! grep -q 'daemon-reload' "$SVCORDER"; then
+    pass "installed + stopped unit: starts it, no reinstall"
+else
+    fail "installed + stopped unit: starts it, no reinstall (out: $out calls: $(tr '\n' ' ' < "$SVCORDER"))"
+fi
+# not installed -> full install path
+: > "$SVCORDER"
+rm -f "$SVDIR/.config/systemd/user/deronode.service"
+systemctl() { echo "systemctl $*" >> "$SVCORDER"; [ "$2" = "start" ]; }
+out="$(service_install 2>&1)"
+if echo "$out" | grep -q "installed + started" && grep -q 'daemon-reload' "$SVCORDER"; then
+    pass "no unit: full install path"
+else
+    fail "no unit: full install path (out: $out calls: $(tr '\n' ' ' < "$SVCORDER"))"
+fi
+rm -rf "$SVDIR"; rm -f "$SVCORDER"; HOME="$SVHOME_SAVE"
+unset -f service_install write_run_wrapper service_backend apply_testnet_defaults build_derod_argv systemctl
 
 # 14. Menu option 7 (reconfigure) is dispatched after the menu
 echo ""
@@ -654,6 +764,12 @@ if echo "$build_src" | grep -q 'have_go' && echo "$build_src" | grep -q 'Go tool
     pass "cmd_build guards on the Go toolchain"
 else
     fail "cmd_build guards on the Go toolchain"
+fi
+build_lib_src="$(sed -n '/^build_derod_from_source()/,/^}/p' lib/build.sh)"
+if echo "$build_lib_src" | grep -q 'bak-\$' && echo "$build_lib_src" | grep -q 'backed up previous binary'; then
+    pass "source build backs up previous binary with timestamp"
+else
+    fail "source build backs up previous binary with timestamp"
 fi
 # build lib: clone community-dev, go build ./cmd/derod, magic-check, marker
 bld="$(cat "$LIB_DIR/build.sh")"
