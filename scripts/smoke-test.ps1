@@ -414,8 +414,13 @@ $invokeSnap = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($invokeSnap -match 'Test-StdinInteractive' -and $invokeSnap -match 'Read-YesNo "derod is running on' -and $invokeSnap -match 'Stop-Node') { Pass 'Invoke-Snapshot prompts to stop a running node' } else { Fail 'Invoke-Snapshot prompts to stop a running node' }
 if ($invokeSnap -match 'Start-ExternalNode' -and $invokeSnap -match 'Install-Service') { Pass 'Invoke-Snapshot restarts after snapshot (external + managed)' } else { Fail 'Invoke-Snapshot restarts after snapshot (external + managed)' }
 if ($invokeSnap -match 'Test-SnapshotRunningOnDataDir' -and $invokeSnap -match 'SnapshotKeepRunning') { Pass 'Invoke-Snapshot keeps library guard condition' } else { Fail 'Invoke-Snapshot keeps library guard condition' }
+if ($invokeSnap -match 'Get-LatestSnapshotArchive' -and $invokeSnap -match 'Read-YesNo "Latest snapshot:' -and $invokeSnap -match 'keeping existing snapshot') { Pass 'Invoke-Snapshot confirms new snapshot when one exists' } else { Fail 'Invoke-Snapshot confirms new snapshot when one exists' }
+$invokeRest = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($invokeRest -match 'Restore-Snapshot' -and $invokeRest -match 'Read-YesNo ''Restore complete\. Start the node now\?''' -and $invokeRest -match 'Start-Node') { Pass 'Invoke-Restore offers to start the node after restore' } else { Fail 'Invoke-Restore offers to start the node after restore' }
+if ($invokeRest -match 'SnapshotYes' -and $invokeRest -match 'Test-StdinInteractive') { Pass 'Invoke-Restore start prompt is interactive + no --yes only' } else { Fail 'Invoke-Restore start prompt is interactive + no --yes only' }
 $snapLib = Get-Content (Join-Path $ProjectDir 'lib/snapshot.ps1') -Raw
 if ($snapLib -match 'function Test-StdinInteractive') { Pass 'lib/snapshot.ps1 defines Test-StdinInteractive' } else { Fail 'lib/snapshot.ps1 defines Test-StdinInteractive' }
+if ($snapLib -match 'function Get-SnapshotArchiveStamp') { Pass 'lib/snapshot.ps1 defines Get-SnapshotArchiveStamp' } else { Fail 'lib/snapshot.ps1 defines Get-SnapshotArchiveStamp' }
 
 Write-Host ''
 Write-Host "=== results: $PASS passed, $FAIL failed ==="

@@ -730,6 +730,21 @@ cmd_resync() {
 cmd_snapshot() {
     resolve_paths
     SNAPSHOT_DIR="${SNAPSHOT_OUT:-$SNAPSHOT_DIR_REAL}"
+    # If a snapshot already exists, present the latest one (name + timestamp)
+    # and confirm a new one. Names are timestamped, so a new archive never
+    # overwrites; this guards the menu against accidental re-snapshots.
+    # Interactive-only (piped/scripted runs and --dry-run proceed straight to
+    # snapshot_pack). Declining keeps the existing snapshot and exits 0.
+    if ! $DRY_RUN && snapshot_stdin_tty; then
+        latest="$(snapshot_latest_archive 2>/dev/null || true)"
+        if [ -n "$latest" ]; then
+            stamp="$(snapshot_archive_stamp "$latest")"
+            if [ "$(yesno "Latest snapshot: $(basename "$latest") ($stamp) — create a new one?" y)" != "y" ]; then
+                echo "${C_MUTE}[*] keeping existing snapshot — nothing created.${C_RESET}"
+                return 0
+            fi
+        fi
+    fi
     # Snapshot needs the chain quiet. If derod is running against our data dir
     # (and --keep-running wasn't passed), offer to stop it, snapshot, then
     # restart. Only prompts on an interactive terminal so piped/scripted calls
@@ -756,6 +771,16 @@ cmd_snapshot() {
 cmd_restore() {
     resolve_paths
     snapshot_restore || exit 1
+    # Restore replaces the chain state and refuses while any derod runs, so the
+    # node is guaranteed stopped here. Offer to bring it back up — interactive
+    # only, and never with --yes, so piped/scripted restores keep their old
+    # behavior (restore but leave the node stopped).
+    if [ "${SNAPSHOT_YES:-false}" != "true" ] \
+       && snapshot_stdin_tty \
+       && [ "$(yesno "Restore complete. Start the node now?" y)" = "y" ]; then
+        echo "${C_INFO}[*] starting derod...${C_RESET}"
+        cmd_start || exit 1
+    fi
 }
 
 # ── Entry ──

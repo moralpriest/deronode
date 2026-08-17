@@ -687,6 +687,21 @@ function Invoke-Resync {
 function Invoke-Snapshot {
     Resolve-Paths
     $script:SnapshotDir = if ($script:SnapshotOut) { $script:SnapshotOut } else { $script:SnapshotDirReal }
+    # If a snapshot already exists, present the latest one (name + timestamp)
+    # and confirm a new one. Names are timestamped, so a new archive never
+    # overwrites; this guards the menu against accidental re-snapshots.
+    # Interactive-only (piped/scripted runs and --dry-run proceed straight to
+    # New-Snapshot). Declining keeps the existing snapshot and exits 0.
+    if (-not $script:DryRun -and (Test-StdinInteractive)) {
+        $latest = Get-LatestSnapshotArchive
+        if ($latest) {
+            $stamp = Get-SnapshotArchiveStamp $latest
+            if (-not (Read-YesNo "Latest snapshot: $(Split-Path -Leaf $latest) ($stamp) - create a new one?" 'y')) {
+                Write-Host '[*] keeping existing snapshot - nothing created.' -ForegroundColor DarkGray
+                return
+            }
+        }
+    }
     # Snapshot needs the chain quiet. If derod is running against our data dir
     # (and --keep-running wasn't passed), offer to stop it, snapshot, then
     # restart. Only prompts on an interactive terminal so piped/scripted calls
@@ -705,6 +720,14 @@ function Invoke-Snapshot {
 function Invoke-Restore {
     Resolve-Paths
     if (-not (Restore-Snapshot)) { exit 1 }
+    # Restore replaces the chain state and refuses while any derod runs, so the
+    # node is guaranteed stopped here. Offer to bring it back up — interactive
+    # only, and never with --yes, so piped/scripted restores keep their old
+    # behavior (restore but leave the node stopped).
+    if (-not $script:SnapshotYes -and (Test-StdinInteractive) -and (Read-YesNo 'Restore complete. Start the node now?' 'y')) {
+        Write-Host '[*] starting derod...' -ForegroundColor DarkCyan
+        Start-Node
+    }
 }
 
 for ($i = 0; $i -lt $args.Count; $i++) {

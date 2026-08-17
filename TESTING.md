@@ -13,8 +13,8 @@ explicitly stop it first.
 cd ~/Projects/deronode
 
 # Full smoke suites — self-contained, wipe and recreate their own bin/
-bash scripts/smoke-test.sh              # expect: 149 passed, 0 failed
-pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 126 passed, 0 failed
+bash scripts/smoke-test.sh              # expect: 157 passed, 0 failed
+pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 130 passed, 0 failed
 
 # Dry-run — offline proof: prints the exact derod argv, writes nothing
 bash node.sh --dry-run --sync-profile=pruned --data-dir=/tmp/d1 --log-dir=/tmp/d2
@@ -47,6 +47,23 @@ service install). The prompt only appears on an interactive terminal — piped o
 scripted `deronode snapshot` calls never auto-stop and fall through to the
 library guard, which keeps refusing unless `--keep-running` is passed.
 (Sections 15 bash / 10 ps cover this prompt-to-stop flow.)
+
+A second interactive guard sits in front of it: if a snapshot already exists in
+the snapshot dir, the wrapper presents the newest one with its timestamp
+(`Latest snapshot: dero-mainnet-20260817-0112.tar.zst (2026-08-17 01:12) —
+create a new one? [Y/n]`). Answering no keeps the existing archive and creates
+nothing — names are timestamped, so a new snapshot never overwrites the old
+one. Non-interactive runs and `--dry-run` skip the prompt and pack directly.
+(Sections 15 bash / 10 ps cover the confirm flow; 15b also unit-tests the
+timestamp parsing of `snapshot_archive_stamp`.)
+
+After a successful restore, an interactive run (without `--yes`) asks
+`Restore complete. Start the node now? [Y/n]` and starts the node — external
+installs via their systemd unit, managed ones via the normal start path.
+Restore refuses while any derod runs, so the node is always stopped at that
+point. Piped/scripted restores and `--yes` skip the prompt and leave the node
+stopped. (Section 15c bash / 10 ps cover the start prompt: yes, no,
+non-interactive, `--yes`, and a failed restore never starting.)
 
 For an externally-installed derod (systemd unit), the snapshot/restore target is
 auto-resolved to the external node's real data dir — the running process's cwd,

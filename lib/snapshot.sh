@@ -242,6 +242,22 @@ snapshot_latest_archive() {
     ls -1t "$dir"/dero-mainnet-*.tar.zst 2>/dev/null | head -1
 }
 
+# Human-readable timestamp for an archive, for the "a snapshot already exists"
+# prompt. Prefers the timestamp baked into the name
+# (dero-mainnet-YYYYMMDD-HHMM[-h<height>].tar.zst), falls back to the file
+# mtime (date -r works on both GNU and BSD), then 'unknown'.
+snapshot_archive_stamp() {
+    local f="$1" stamp
+    stamp="$(basename "$f" | sed -n 's/^dero-mainnet-\([0-9]\{4\}\)\([0-9]\{2\}\)\([0-9]\{2\}\)-\([0-9]\{2\}\)\([0-9]\{2\}\).*/\1-\2-\3 \4:\5/p')"
+    if [ -n "$stamp" ]; then
+        echo "$stamp"
+    elif date -r "$f" '+%Y-%m-%d %H:%M' >/dev/null 2>&1; then
+        date -r "$f" '+%Y-%m-%d %H:%M'
+    else
+        echo "unknown"
+    fi
+}
+
 snapshot_restore() {
     local archive="$SNAPSHOT_FROM" chain_dir mani_h bak ts tmp ok item
     if [ -z "$archive" ]; then

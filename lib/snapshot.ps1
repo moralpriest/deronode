@@ -262,6 +262,23 @@ function Get-LatestSnapshotArchive {
     return $archives[0].FullName
 }
 
+# Human-readable timestamp for an archive, for the "a snapshot already exists"
+# prompt. Prefers the timestamp baked into the name
+# (dero-mainnet-yyyyMMdd-HHmm[-h<height>].tar.zst), falls back to the file
+# mtime, then 'unknown'.
+function Get-SnapshotArchiveStamp {
+    param([string]$Path)
+    $name = Split-Path -Leaf $Path
+    if ($name -match '^dero-mainnet-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})') {
+        return '{0}-{1}-{2} {3}:{4}' -f $Matches[1], $Matches[2], $Matches[3], $Matches[4], $Matches[5]
+    }
+    try {
+        return (Get-Item $Path).LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+    } catch {
+        return 'unknown'
+    }
+}
+
 function Restore-Snapshot {
     $archive = $script:SnapshotFrom
     if (-not $archive) {

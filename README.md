@@ -122,6 +122,14 @@ Output is a standard `dero-mainnet-YYYYMMDD-HHMM[-h<height>].tar.zst` plus a
 `.sha256` checksum and a chain-facts-only `.manifest.json` (artifact, timestamps,
 height, sizes, includes/excludes — no hostname, node tag, or IP).
 
+If a snapshot already exists, an interactive run presents the newest one with
+its timestamp and confirms before creating another
+(`Latest snapshot: dero-mainnet-20260817-0112.tar.zst (2026-08-17 01:12) —
+create a new one? [Y/n]`). Archives are timestamped, so a new snapshot never
+overwrites the old one; declining keeps the existing archive and creates
+nothing. The prompt only appears on an interactive terminal — piped or
+scripted runs pack straight away.
+
 ```bash
 deronode snapshot                        # zstd level 10 -> <install>/snapshots
 deronode snapshot --max-ratio            # level 19 (smaller, slower)
@@ -134,6 +142,14 @@ Restore moves the current chain to `chain.bak-<timestamp>`, verifies the
 archive checksum (skips only with explicit confirmation), and extracts with
 `rargz` when installed, else plain `tar --zstd`. Keep the `.bak` until the node
 reaches the snapshot height, then delete it manually.
+
+Once the restore completes, an interactive run asks
+`Restore complete. Start the node now? [Y/n]` (default yes) and launches the
+node — external installs via their systemd unit, managed ones via the normal
+start path. Restore refuses while any derod runs, so the node is guaranteed
+stopped at that point. The prompt only appears on an interactive terminal and
+never with `--yes`, so scripted restores restore and leave the node stopped,
+as before.
 
 ### Common examples
 

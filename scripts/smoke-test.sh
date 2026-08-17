@@ -718,52 +718,65 @@ else
     fail "cmd_logs tails derod.log and falls back to out/err captures"
 fi
 
-# 15. Snapshot prompts to stop a running node (stub-extracted from node.sh)
+# 15. Snapshot prompts — confirm-new-snapshot + prompt-to-stop (stub-extracted
+# from node.sh). yesno answers dispatch on the prompt text: the confirm-new
+# prompt starts with "Latest snapshot:", the stop prompt with "derod is running".
 echo ""
-echo "15. Snapshot prompt-to-stop:"
+echo "15. Snapshot prompts:"
 eval "$(sed -n '/^cmd_snapshot()/,/^}/p' node.sh)"
 snapshot_running_on_data_dir() { return 0; }
 snapshot_stdin_tty() { return 0; }
 resolve_paths() { :; }
-yesno() { echo "$SNAP_ANS"; }
+yesno() { case "$1" in Latest*) echo "$SNAP_NEW" ;; *) echo "$SNAP_STOP" ;; esac; }
 cmd_stop() { echo "STOP_CALLED" >> "$ORDER"; }
 snapshot_pack() { echo "SNAPSHOT_PACK_CALLED" >> "$ORDER"; return 0; }
 node_is_external() { return 1; }
 service_install() { echo "SERVICE_INSTALL_CALLED" >> "$ORDER"; return 0; }
 external_start() { echo "EXTERNAL_START_CALLED" >> "$ORDER"; return 0; }
-C_OK=''; C_RESET=''; C_INFO=''; C_ERR=''; C_WARN=''
+snapshot_latest_archive() { echo "$LATEST_ARC"; }
+snapshot_archive_stamp() { echo "2026-08-17 01:12"; }
+C_OK=''; C_RESET=''; C_INFO=''; C_ERR=''; C_WARN=''; C_MUTE=''
 DRY_RUN=false
 SNAPSHOT_KEEP_RUNNING=false
 SNAPSHOT_OUT=""
 SNAPSHOT_DIR_REAL="$SNAPFIX/out2"
 DATA_DIR_REAL="$SNAPCHAIN"
+LATEST_ARC="$SNAPFIX/out2/dero-mainnet-20260817-0112.tar.zst"
+SNAP_NEW=y; SNAP_STOP=y
 ORDER="$(mktemp)"
 
-SNAP_ANS=y; cmd_snapshot
+cmd_snapshot
 stop_ln=$(grep -n '^STOP_CALLED$' "$ORDER" | cut -d: -f1)
 pack_ln=$(grep -n '^SNAPSHOT_PACK_CALLED$' "$ORDER" | cut -d: -f1)
 inst_ln=$(grep -n '^SERVICE_INSTALL_CALLED$' "$ORDER" | cut -d: -f1)
 if [ -n "$stop_ln" ] && [ -n "$pack_ln" ] && [ -n "$inst_ln" ] && [ "$stop_ln" -lt "$pack_ln" ] && [ "$pack_ln" -lt "$inst_ln" ]; then
-    pass "interactive yes: stop -> snapshot -> restart order"
+    pass "existing snapshot + yes: stop -> snapshot -> restart order"
 else
-    fail "interactive yes: stop -> snapshot -> restart order (order: $(tr '\n' ' ' < "$ORDER"))"
+    fail "existing snapshot + yes: stop -> snapshot -> restart order (order: $(tr '\n' ' ' < "$ORDER"))"
 fi
 
-: > "$ORDER"; SNAP_ANS=n; cmd_snapshot
+: > "$ORDER"; SNAP_NEW=n; cmd_snapshot
+if ! grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
+    pass "existing snapshot + no: keeps it, nothing created"
+else
+    fail "existing snapshot + no: keeps it, nothing created (order: $(tr '\n' ' ' < "$ORDER"))"
+fi
+
+: > "$ORDER"; SNAP_NEW=y; SNAP_STOP=n; cmd_snapshot
 if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
-    pass "interactive no: refused without stopping"
+    pass "existing snapshot: yes to new, no to stop -> snapshot without stopping"
 else
-    fail "interactive no: refused without stopping"
+    fail "existing snapshot: yes to new, no to stop -> snapshot without stopping"
 fi
 
-: > "$ORDER"; snapshot_stdin_tty() { return 1; }; SNAP_ANS=y; cmd_snapshot
+: > "$ORDER"; snapshot_stdin_tty() { return 1; }; SNAP_NEW=n; SNAP_STOP=n; cmd_snapshot
 if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
-    pass "non-interactive: never auto-stops"
+    pass "non-interactive: no prompts even with existing snapshot"
 else
-    fail "non-interactive: never auto-stops"
+    fail "non-interactive: no prompts even with existing snapshot"
 fi
 
-: > "$ORDER"; snapshot_stdin_tty() { return 0; }; SNAPSHOT_KEEP_RUNNING=true; cmd_snapshot
+: > "$ORDER"; snapshot_stdin_tty() { return 0; }; SNAPSHOT_KEEP_RUNNING=true; SNAP_NEW=y; SNAP_STOP=y; cmd_snapshot
 if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
     pass "--keep-running: no stop prompt"
 else
@@ -771,15 +784,87 @@ else
 fi
 SNAPSHOT_KEEP_RUNNING=false
 
-: > "$ORDER"; DRY_RUN=true; cmd_snapshot
+: > "$ORDER"; DRY_RUN=true; SNAP_NEW=n; SNAP_STOP=n; cmd_snapshot
 if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
-    pass "dry-run: no stop prompt"
+    pass "dry-run: no prompts"
 else
-    fail "dry-run: no stop prompt"
+    fail "dry-run: no prompts"
 fi
 DRY_RUN=false
+
+: > "$ORDER"; LATEST_ARC=""; SNAP_NEW=n; SNAP_STOP=n; cmd_snapshot
+if grep -q '^SNAPSHOT_PACK_CALLED$' "$ORDER" && ! grep -q '^STOP_CALLED$' "$ORDER"; then
+    pass "no existing snapshot: confirm skipped, no to stop proceeds"
+else
+    fail "no existing snapshot: confirm skipped, no to stop proceeds"
+fi
 rm -f "$ORDER"
-unset -f cmd_snapshot snapshot_running_on_data_dir snapshot_stdin_tty resolve_paths yesno cmd_stop snapshot_pack node_is_external service_install external_start
+unset -f cmd_snapshot snapshot_running_on_data_dir snapshot_stdin_tty resolve_paths yesno cmd_stop snapshot_pack node_is_external service_install external_start snapshot_latest_archive snapshot_archive_stamp
+
+# 15b. snapshot_archive_stamp parses the timestamped archive name (real function)
+eval "$(sed -n '/^snapshot_archive_stamp()/,/^}/p' lib/snapshot.sh)"
+if [ "$(snapshot_archive_stamp "dero-mainnet-20260817-0112-h123456.tar.zst")" = "2026-08-17 01:12" ]; then
+    pass "snapshot_archive_stamp parses timestamped name"
+else
+    fail "snapshot_archive_stamp parses timestamped name"
+fi
+unset -f snapshot_archive_stamp
+
+# 15c. Restore prompt-to-start: after a successful restore, cmd_restore offers
+# to start the node (interactive + no --yes only; failures never start).
+eval "$(sed -n '/^cmd_restore()/,/^}/p' node.sh)"
+resolve_paths() { :; }
+snapshot_stdin_tty() { return 0; }
+yesno() { echo "$REST_ANS"; }
+snapshot_restore() { echo "RESTORE_CALLED" >> "$ORDER"; return 0; }
+cmd_start() { echo "START_CALLED" >> "$ORDER"; return 0; }
+C_INFO=''; C_ERR=''
+SNAPSHOT_YES=false
+ORDER="$(mktemp)"
+
+REST_ANS=y; cmd_restore
+rest_ln=$(grep -n '^RESTORE_CALLED$' "$ORDER" | cut -d: -f1)
+start_ln=$(grep -n '^START_CALLED$' "$ORDER" | cut -d: -f1)
+if [ -n "$rest_ln" ] && [ -n "$start_ln" ] && [ "$rest_ln" -lt "$start_ln" ]; then
+    pass "restore + yes: restores then starts the node"
+else
+    fail "restore + yes: restores then starts the node (order: $(tr '\n' ' ' < "$ORDER"))"
+fi
+
+: > "$ORDER"; REST_ANS=n; cmd_restore
+if grep -q '^RESTORE_CALLED$' "$ORDER" && ! grep -q '^START_CALLED$' "$ORDER"; then
+    pass "restore + no: restores without starting"
+else
+    fail "restore + no: restores without starting"
+fi
+
+: > "$ORDER"; snapshot_stdin_tty() { return 1; }; REST_ANS=y; cmd_restore
+if grep -q '^RESTORE_CALLED$' "$ORDER" && ! grep -q '^START_CALLED$' "$ORDER"; then
+    pass "restore non-interactive: no start prompt"
+else
+    fail "restore non-interactive: no start prompt"
+fi
+
+: > "$ORDER"; snapshot_stdin_tty() { return 0; }; SNAPSHOT_YES=true; REST_ANS=y; cmd_restore
+if grep -q '^RESTORE_CALLED$' "$ORDER" && ! grep -q '^START_CALLED$' "$ORDER"; then
+    pass "restore --yes: no start prompt"
+else
+    fail "restore --yes: no start prompt"
+fi
+SNAPSHOT_YES=false
+
+: > "$ORDER"; snapshot_restore() { echo "RESTORE_FAILED" >> "$ORDER"; return 1; }
+if ( cmd_restore ) 2>/dev/null; then
+    fail "restore failure: no start prompt"
+else
+    if grep -q '^RESTORE_FAILED$' "$ORDER" && ! grep -q '^START_CALLED$' "$ORDER"; then
+        pass "restore failure: no start prompt"
+    else
+        fail "restore failure: no start prompt"
+    fi
+fi
+rm -f "$ORDER"
+unset -f cmd_restore resolve_paths snapshot_stdin_tty yesno snapshot_restore cmd_start
 
 echo ""
 echo "=== results: $PASS passed, $FAIL failed ==="
