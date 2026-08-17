@@ -378,11 +378,11 @@ if ($dlPs -match 'Reusing cached' -and $dlPs -match 'archives' -and $dlPs -match
 if ($dlPs -match '\$old\.bak-' -and $dlPs -match 'backed up previous binary') { Pass 'Invoke-FetchDerod backs up previous binary with timestamp' } else { Fail 'Invoke-FetchDerod backs up previous binary with timestamp' }
 if ($dlPs -match 'function Prune-DerodBackups' -and $dlPs -match 'Prune-DerodBackups \$derodDir' -and (Get-Content (Join-Path $ProjectDir 'lib/build.ps1') -Raw) -match 'Prune-DerodBackups \$derodDir') { Pass 'binary backups pruned to newest 3 (download + build)' } else { Fail 'binary backups pruned to newest 3 (download + build)' }
 
-# 9. Menu option 7 (reconfigure) is dispatched after the menu
+# 9. Menu option 8 (reconfigure) is dispatched after the menu
 Write-Host ''
 Write-Host '9. Menu reconfigure dispatch:'
 $menuSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
-if ($menuSrc -match '''7'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 7 sets Action=reconfigure" } else { Fail "menu option 7 sets Action=reconfigure" }
+if ($menuSrc -match '''8'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 8 sets Action=reconfigure" } else { Fail "menu option 8 sets Action=reconfigure" }
 if ($menuSrc -match "'reconfigure' \{ Reconfigure-Node \}") { Pass "post-menu switch dispatches reconfigure" } else { Fail "post-menu switch dispatches reconfigure" }
 if ($menuSrc -match 'No derod installed yet' -and $menuSrc -match 'Ensure-Binary' -and $menuSrc -match "Read-YesNo 'derod installed\. Start the node now\?'" -and $menuSrc -match "\$script:Action = 'start'") { Pass 'first-run install prompts to start the node, then continues into start' } else { Fail 'first-run install prompts to start the node, then continues into start' }
 # first-run install honors the configure run-mode answer (service vs foreground)
@@ -392,9 +392,9 @@ if ($cfgSrc -match '\$script:AsService = \$false' -and $cfgSrc -match "\$script:
 # reconfigure also continues straight into start (only when nothing is running)
 if ($menuSrc -match 'function Reconfigure-Node' -and $menuSrc -match 'Test-NodeRunning' -and $menuSrc -match 'Start-Node') { Pass 'reconfigure continues into start when stopped' } else { Fail 'reconfigure continues into start when stopped' }
 # resync command: parse, menu, dispatch, wipe+fastsync+start
-if ($menuSrc -match '''resync'' \{ \$script:Action = ''resync'' \}' -and $menuSrc -match '''11'' \{ \$script:Action = ''resync''; return \}' -and $menuSrc -match '''resync'' \{ Invoke-Resync \}') { Pass 'resync wired into parse/menu/dispatch' } else { Fail 'resync wired into parse/menu/dispatch' }
+if ($menuSrc -match '''resync'' \{ \$script:Action = ''resync'' \}' -and $menuSrc -match '''12'' \{ \$script:Action = ''resync''; return \}' -and $menuSrc -match '''resync'' \{ Invoke-Resync \}') { Pass 'resync wired into parse/menu/dispatch' } else { Fail 'resync wired into parse/menu/dispatch' }
 # build command (compile community-dev source): parse, menu, dispatch
-if ($menuSrc -match '''build'' \{ \$script:Action = ''build'' \}' -and $menuSrc -match '''6'' \{ \$script:Action = ''build''; return \}' -and $menuSrc -match '''build'' \{ Build-Node \}') { Pass 'build wired into parse/menu/dispatch' } else { Fail 'build wired into parse/menu/dispatch' }
+if ($menuSrc -match '''build'' \{ \$script:Action = ''build'' \}' -and $menuSrc -match '''7'' \{ \$script:Action = ''build''; return \}' -and $menuSrc -match '''build'' \{ Build-Node \}') { Pass 'build wired into parse/menu/dispatch' } else { Fail 'build wired into parse/menu/dispatch' }
 $bldSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($bldSrc -match 'function Build-Node' -and $bldSrc -match 'Invoke-BuildDerodFromSource' -and $bldSrc -match 'Stop-Service' -and $bldSrc -match 'Install-Service' -and $bldSrc -match 'Test-ExternalInstalled') { Pass 'Build-Node stops+builds+restarts, refuses external' } else { Fail 'Build-Node stops+builds+restarts, refuses external' }
 if ($bldSrc -match 'Test-GoAvailable' -and $bldSrc -match 'Go toolchain not found') { Pass 'Build-Node guards on the Go toolchain' } else { Fail 'Build-Node guards on the Go toolchain' }
@@ -420,10 +420,10 @@ if ($menuSrc -match 'while \(\$true\)' -and $menuSrc -match '\$script:MenuMode =
 if ($menuSrc -match 'function Start-Node' -and $menuSrc -match '\$script:MenuMode') { Pass 'Start-Node returns to the menu in menu mode' } else { Fail 'Start-Node returns to the menu in menu mode' }
 if ($menuSrc -notmatch 'Install-Service -Argv') { Pass 'Start-Node lets Install-Service build argv (no pre-build warnings)' } else { Fail 'Start-Node lets Install-Service build argv (no pre-build warnings)' }
 # logs command: parse, menu, dispatch, tail selection
-if ($menuSrc -match '''logs'' \{ \$script:Action = ''logs'' \}' -and $menuSrc -match '''12'' \{ \$script:Action = ''logs''; return \}' -and $menuSrc -match '''logs'' \{ Show-Logs \}') { Pass 'logs wired into parse/menu/dispatch' } else { Fail 'logs wired into parse/menu/dispatch' }
+if ($menuSrc -match '''logs'' \{ \$script:Action = ''logs'' \}' -and $menuSrc -match '''5'' \{ \$script:Action = ''logs''; return \}' -and $menuSrc -match '''logs'' \{ Show-Logs \}') { Pass 'logs wired into parse/menu/dispatch' } else { Fail 'logs wired into parse/menu/dispatch' }
 if ($menuSrc -match 'function Show-Logs' -and $menuSrc -match 'Get-Content.*-Wait' -and $menuSrc -match 'derod.out.log') { Pass 'Show-Logs tails derod.log and falls back to out/err captures' } else { Fail 'Show-Logs tails derod.log and falls back to out/err captures' }
 # uninstall command: parse, menu, dispatch, stop+wipe, keep deronode
-if ($menuSrc -match '''uninstall'' \{ \$script:Action = ''uninstall'' \}' -and $menuSrc -match '''13'' \{ \$script:Action = ''uninstall''; return \}' -and $menuSrc -match '''uninstall'' \{ Uninstall-Node \}') { Pass 'uninstall wired into parse/menu/dispatch' } else { Fail 'uninstall wired into parse/menu/dispatch' }
+if ($menuSrc -match '''uninstall'' \{ \$script:Action = ''uninstall'' \}' -and $menuSrc -match '''15'' \{ \$script:Action = ''uninstall''; return \}' -and $menuSrc -match '''uninstall'' \{ Uninstall-Node \}') { Pass 'uninstall wired into parse/menu/dispatch' } else { Fail 'uninstall wired into parse/menu/dispatch' }
 $uninstSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($uninstSrc -match 'function Uninstall-Node' -and $uninstSrc -match 'Remove-Service' -and $uninstSrc -match 'Remove-Item' -and $uninstSrc -match 'DataDirReal' -and $uninstSrc -match 'ConfigFile') { Pass 'Uninstall-Node removes service + binary/chain/logs/snapshots/config' } else { Fail 'Uninstall-Node removes service + binary/chain/logs/snapshots/config' }
 if ($uninstSrc -match 'Test-ExternalInstalled' -and $uninstSrc -match 'Read-YesNo') { Pass 'Uninstall-Node refuses external + confirms before wiping' } else { Fail 'Uninstall-Node refuses external + confirms before wiping' }
@@ -432,8 +432,8 @@ if ($uninstSrc -match 'stays installed' -and $uninstSrc -match 'DryRun') { Pass 
 $svcPs = Get-Content (Join-Path $ProjectDir 'lib/service.ps1') -Raw
 if ($svcPs -match 'function Remove-Service' -and $svcPs -match 'systemctl --user disable' -and $svcPs -match 'LaunchAgents/org.deronode.derod.plist') { Pass 'Remove-Service disables systemd + removes launchd plist' } else { Fail 'Remove-Service disables systemd + removes launchd plist' }
 # send/receive (thruflux): parse, menu, dispatch, host/join wrappers
-if ($menuSrc -match '''send'' \{ \$script:Action = ''send'' \}' -and $menuSrc -match '''14'' \{ \$script:Action = ''send''; return \}' -and $menuSrc -match '''send'' \{ Send-Snapshot \}' -and $menuSrc -match '''receive'' \{ Receive-Snapshot \}') { Pass 'send/receive wired into parse/menu/dispatch' } else { Fail 'send/receive wired into parse/menu/dispatch' }
-if ($menuSrc -match '15\) Receive snapshot from a friend' -and $menuSrc -match 'Join code' -and $menuSrc -match '''receive''') { Pass 'menu option 15 prompts for the join code and dispatches receive' } else { Fail 'menu option 15 prompts for the join code and dispatches receive' }
+if ($menuSrc -match '''send'' \{ \$script:Action = ''send'' \}' -and $menuSrc -match '''13'' \{ \$script:Action = ''send''; return \}' -and $menuSrc -match '''send'' \{ Send-Snapshot \}' -and $menuSrc -match '''receive'' \{ Receive-Snapshot \}') { Pass 'send/receive wired into parse/menu/dispatch' } else { Fail 'send/receive wired into parse/menu/dispatch' }
+if ($menuSrc -match '14\) Receive snapshot' -and $menuSrc -match 'Join code' -and $menuSrc -match '''receive''') { Pass 'menu option 14 prompts for the join code and dispatches receive' } else { Fail 'menu option 14 prompts for the join code and dispatches receive' }
 $sendSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($sendSrc -match 'function Send-Snapshot' -and $sendSrc -match 'thru host' -and $sendSrc -match 'Get-LatestSnapshotArchive' -and $sendSrc -match 'Ensure-Thruflux') { Pass 'Send-Snapshot hosts the newest snapshot via thruflux' } else { Fail 'Send-Snapshot hosts the newest snapshot via thruflux' }
 if ($sendSrc -match 'function Receive-Snapshot' -and $sendSrc -match 'thru join' -and $sendSrc -match 'ReceiveCode' -and $sendSrc -match 'Ensure-Thruflux') { Pass 'Receive-Snapshot joins a thruflux code' } else { Fail 'Receive-Snapshot joins a thruflux code' }

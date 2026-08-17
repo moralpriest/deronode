@@ -77,10 +77,12 @@ if [[ "$bash_ver" =~ ^deronode\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 else
     fail "bash runner --version prints '$bash_ver'"
 fi
-if grep -q 'DERONODE_VERSION="1.1.0"' node.sh && grep -q "DeronodeVersion = '1.1.0'" node.ps1; then
-    pass "version is 1.1.0 in both runners"
+bash_ver_raw=$(grep -oP 'DERONODE_VERSION="\K[^"]+' node.sh 2>/dev/null)
+ps_ver_raw=$(grep -oP "DeronodeVersion = '\K[^']+" node.ps1 2>/dev/null)
+if [ -n "$bash_ver_raw" ] && [ -n "$ps_ver_raw" ] && [ "$bash_ver_raw" = "$ps_ver_raw" ]; then
+    pass "version is $bash_ver_raw in both runners"
 else
-    fail "version is 1.1.0 in both runners"
+    fail "version mismatch — bash=$bash_ver_raw ps=$ps_ver_raw"
 fi
 if grep -q 'resync' lib/ui.sh && grep -q 'logs' lib/ui.sh && grep -q 'build' lib/ui.ps1 && grep -q 'resync' lib/ui.ps1; then
     pass "menu hint lists build/resync/logs (both UIs)"
@@ -272,7 +274,7 @@ if grep -q 'json_rpc' "$PROJECT_DIR/lib/rpc.sh"; then pass "rpc_call targets /js
 eval "$(sed -n '/^catalog_os()/,/^}/p' lib/platform.sh)"
 eval "$(sed -n '/^catalog_arch()/,/^}/p' lib/platform.sh)"
 eval "$(sed -n '/^resolve_release()/,/^}/p' lib/download.sh)"
-DERONODE_VERSION="1.1.0"
+DERONODE_VERSION="$(grep -oP 'DERONODE_VERSION="\K[^"]+' node.sh)"
 GH_DL="https://github.com/DEROFDN/derohe/releases/download"
 REPO="DEROFDN/derohe"
 # Stub curl: fake the GitHub releases/latest redirect so this test needs no network.
@@ -707,11 +709,11 @@ fi
 rm -rf "$SVDIR"; rm -f "$SVCORDER"; HOME="$SVHOME_SAVE"
 unset -f service_install write_run_wrapper service_backend apply_testnet_defaults build_derod_argv systemctl
 
-# 14. Menu option 7 (reconfigure) is dispatched after the menu
+# 14. Menu option 8 (reconfigure) is dispatched after the menu
 echo ""
 echo "14. Menu reconfigure dispatch:"
 menu_src="$(sed -n '/^menu()/,/^}/p' node.sh)"
-echo "$menu_src" | grep -q '7) ACTION=reconfigure' && pass "menu option 7 sets ACTION=reconfigure" || fail "menu option 7 sets ACTION=reconfigure"
+echo "$menu_src" | grep -q '8) ACTION=reconfigure' && pass "menu option 8 sets ACTION=reconfigure" || fail "menu option 8 sets ACTION=reconfigure"
 entry_src="$(sed -n '/^case "\$ACTION" in/,$p' node.sh)"
 echo "$entry_src" | grep -q 'reconfigure) cmd_reconfigure ;;' && pass "post-menu case dispatches reconfigure" || fail "post-menu case dispatches reconfigure"
 # first-run install (menu option 1 with no derod): asks to start the node,
@@ -768,13 +770,13 @@ else
     fail "reconfigure continues into start when stopped"
 fi
 # resync command: parse, menu, dispatch, wipe+fastsync+start
-if grep -q 'resync) ACTION="resync"' node.sh && grep -q '11) ACTION=resync' node.sh && grep -qE 'resync\) +cmd_resync ;;' node.sh; then
+if grep -q 'resync) ACTION="resync"' node.sh && grep -q '12) ACTION=resync' node.sh && grep -qE 'resync\) +cmd_resync ;;' node.sh; then
     pass "resync wired into parse/menu/dispatch"
 else
     fail "resync wired into parse/menu/dispatch"
 fi
 # build command (compile community-dev source): parse, menu, dispatch
-if grep -q 'build) ACTION="build"' node.sh && grep -q '6) ACTION=build' node.sh && grep -qE 'build\) +cmd_build ;;' node.sh; then
+if grep -q 'build) ACTION="build"' node.sh && grep -q '7) ACTION=build' node.sh && grep -qE 'build\) +cmd_build ;;' node.sh; then
     pass "build wired into parse/menu/dispatch"
 else
     fail "build wired into parse/menu/dispatch"
@@ -847,7 +849,7 @@ else
     fail "resync wipes chain then fastsync-bootstraps and starts"
 fi
 # logs command: parse, menu, dispatch, tail selection
-if grep -q 'logs) ACTION="logs"' node.sh && grep -q '12) ACTION=logs' node.sh && grep -q 'logs).*cmd_logs ;;' node.sh; then
+if grep -q 'logs) ACTION="logs"' node.sh && grep -q '5) ACTION=logs' node.sh && grep -q 'logs).*cmd_logs ;;' node.sh; then
     pass "logs wired into parse/menu/dispatch"
 else
     fail "logs wired into parse/menu/dispatch"
@@ -859,7 +861,7 @@ else
     fail "cmd_logs tails derod.log and falls back to out/err captures"
 fi
 # uninstall command: parse, menu, dispatch, stop+wipe, keep deronode
-if grep -q 'uninstall) ACTION="uninstall"' node.sh && grep -q '13) ACTION=uninstall' node.sh && grep -qE 'uninstall\) +cmd_uninstall ;;' node.sh; then
+if grep -q 'uninstall) ACTION="uninstall"' node.sh && grep -q '15) ACTION=uninstall' node.sh && grep -qE 'uninstall\) +cmd_uninstall ;;' node.sh; then
     pass "uninstall wired into parse/menu/dispatch"
 else
     fail "uninstall wired into parse/menu/dispatch"
@@ -886,16 +888,16 @@ else
     fail "cmd_uninstall keeps deronode itself + supports dry-run"
 fi
 # send/receive (thruflux): parse, menu, dispatch, host/join wrappers
-if grep -q 'send) ACTION="send"' node.sh && grep -q '14) ACTION=send' node.sh && grep -qE 'send\) +cmd_send ;;' node.sh && grep -qE 'receive\) +cmd_receive ;;' node.sh; then
+if grep -q 'send) ACTION="send"' node.sh && grep -q '13) ACTION=send' node.sh && grep -qE 'send\) +cmd_send ;;' node.sh && grep -qE 'receive\) +cmd_receive ;;' node.sh; then
     pass "send/receive wired into parse/menu/dispatch"
 else
     fail "send/receive wired into parse/menu/dispatch"
 fi
-# menu option 15: receive — prompts for the join code, then dispatches receive
-if grep -q '15)' node.sh && grep -q 'Receive snapshot from a friend' node.sh && grep -q 'Join code' node.sh && grep -q 'ACTION=receive; return' node.sh; then
-    pass "menu option 15 prompts for the join code and dispatches receive"
+# menu option 14: receive — prompts for the join code, then dispatches receive
+if grep -q '14)' node.sh && grep -q 'Receive snapshot' node.sh && grep -q 'Join code' node.sh && grep -q 'ACTION=receive; return' node.sh; then
+    pass "menu option 14 prompts for the join code and dispatches receive"
 else
-    fail "menu option 15 prompts for the join code and dispatches receive"
+    fail "menu option 14 prompts for the join code and dispatches receive"
 fi
 send_src="$(sed -n '/^cmd_send()/,/^}/p' node.sh)"
 if echo "$send_src" | grep -q 'thru host' && echo "$send_src" | grep -q 'snapshot_latest_archive' && echo "$send_src" | grep -q 'thru_ensure'; then

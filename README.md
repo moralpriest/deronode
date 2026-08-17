@@ -66,12 +66,12 @@ deronode logs                   tail the node log live (Ctrl-C to stop)
 deronode uninstall              remove derod + all node data (binary, chain, logs,
                                  snapshots, config); keeps deronode itself
                                  (prompts for confirmation; --yes skips it)
-deronode send [<archive>]        share a snapshot (or any file) with a friend via
-                                 thruflux — prints a join code (fast, encrypted QUIC
-                                 P2P); defaults to the newest snapshot (menu option 14)
-                                 (thruflux CLI: https://github.com/samsungplay/Thruflux)
+deronode send [<archive>]        share a snapshot (or any file) via thruflux
+                                  — prints a join code (fast, encrypted QUIC
+                                  P2P); defaults to the newest snapshot (menu option 13)
+                                  (thruflux CLI: https://github.com/samsungplay/Thruflux)
 deronode receive <code>          receive a thruflux transfer into --out (default .);
-                                 menu option 15 prompts for the join code instead
+                                  menu option 14 prompts for the join code instead
 deronode --reconfigure          re-run the first-run prompts (incl. data-dir / log-dir)
 deronode --dry-run              resolve nothing; print the derod command line
 deronode --help                 full flag reference
@@ -188,8 +188,8 @@ capacity you can self-host the signaling server (`thru server`).
 ```bash
 deronode send                     # newest snapshot -> join code to share
 deronode send /path/to/file.bin   # any file, same flow
-deronode receive ABCDEFGH         # friend side; files land in ./ (or --out <dir>)
-                                   # also menu option 15 — it asks for the join code
+deronode receive ABCDEFGH         # receiver side; files land in ./ (or --out <dir>)
+                                   # also menu option 14 — it asks for the join code
 ```
 
 `deronode send` hosts the snapshot's `.sha256` and `.manifest.json` alongside
@@ -241,7 +241,7 @@ deronode --extra-arg=--rpc-public --extra-arg=--tor-port=9051 start
 
 ### Uninstall
 
-`deronode uninstall` (menu option 13) removes the managed node completely:
+`deronode uninstall` (menu option 15) removes the managed node completely:
 it stops derod, deletes the service unit (systemd user unit / LaunchAgent /
 pid fallback), and removes the binary, chain data, logs, snapshots, and
 `config.json`. deronode itself stays installed — the next run shows the

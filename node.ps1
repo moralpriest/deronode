@@ -296,17 +296,17 @@ function Show-Menu {
         Write-Host '  2) Start as background service'
         Write-Host '  3) Stop'
         Write-Host '  4) Status'
-        Write-Host '  5) Update derod (release or community-dev)'
-        Write-Host '  6) Build derod from community-dev source'
-        Write-Host '  7) Reconfigure'
-        Write-Host '  8) Show command line (dry-run)'
-        Write-Host '  9) Snapshot chain state (tar.zst)'
-        Write-Host '  10) Restore chain state from snapshot'
-        Write-Host '  11) Resync: wipe chain + re-bootstrap (fastsync)'
-        Write-Host '  12) View node logs (tail -f)'
-        Write-Host '  13) Uninstall: remove derod + all node data (keep deronode)'
-        Write-Host '  14) Send snapshot to a friend (thruflux)'
-        Write-Host '  15) Receive snapshot from a friend (thruflux)'
+        Write-Host '  5) View node logs (tail -f)'
+        Write-Host '  6) Update derod (release or community-dev)'
+        Write-Host '  7) Build derod from community-dev source'
+        Write-Host '  8) Reconfigure'
+        Write-Host '  9) Show command line (dry-run)'
+        Write-Host '  10) Snapshot chain state (tar.zst)'
+        Write-Host '  11) Restore chain state from snapshot'
+        Write-Host '  12) Resync: wipe chain + re-bootstrap (fastsync)'
+        Write-Host '  13) Share snapshot (thruflux)'
+        Write-Host '  14) Receive snapshot (thruflux)'
+        Write-Host '  15) Uninstall: remove derod + all node data (keep deronode)'
         Write-Host '  q) Quit'
         $a = Read-Ask 'Choose' ''
         switch ($a) {
@@ -314,7 +314,8 @@ function Show-Menu {
             '2' { $script:Action = 'start'; $script:AsService = $true; return }
             '3' { $script:Action = 'stop'; return }
             '4' { $script:Action = 'status'; return }
-            '5' {
+            '5' { $script:Action = 'logs'; return }
+            '6' {
                 Write-Host '    Update source:'
                 Write-Host '      1) Latest release (download)'
                 Write-Host '      2) community-dev source (compile)'
@@ -323,17 +324,15 @@ function Show-Menu {
                 $script:Action = 'update'
                 return
             }
-            '6' { $script:Action = 'build'; return }
-            '7' { $script:Action = 'reconfigure'; return }
-            '8' { $script:Action = 'start'; $script:DryRun = $true; return }
-            '9' { $script:Action = 'snapshot'; return }
-            '10' { $script:Action = 'restore'; return }
-            '11' { $script:Action = 'resync'; return }
-            '12' { $script:Action = 'logs'; return }
-            '13' { $script:Action = 'uninstall'; return }
-            '14' { $script:Action = 'send'; return }
-            '15' {
-                Write-Host '    Enter the join code your friend shared:'
+            '7' { $script:Action = 'build'; return }
+            '8' { $script:Action = 'reconfigure'; return }
+            '9' { $script:Action = 'start'; $script:DryRun = $true; return }
+            '10' { $script:Action = 'snapshot'; return }
+            '11' { $script:Action = 'restore'; return }
+            '12' { $script:Action = 'resync'; return }
+            '13' { $script:Action = 'send'; return }
+            '14' {
+                Write-Host '    Enter the join code:'
                 $code = Read-Ask 'Join code' ''
                 if ($code) {
                     $script:ReceiveCode = $code
@@ -342,6 +341,7 @@ function Show-Menu {
                 }
                 Write-Host '[x] No join code entered' -ForegroundColor Red
             }
+            '15' { $script:Action = 'uninstall'; return }
             'q' { exit 0 }
             default { Write-Host '[x] Unknown choice' -ForegroundColor Red }
         }

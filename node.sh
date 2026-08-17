@@ -331,17 +331,17 @@ menu() {
         echo "  ${C_BOLD}2)${C_RESET} Start as background service"
         echo "  ${C_BOLD}3)${C_RESET} Stop"
         echo "  ${C_BOLD}4)${C_RESET} Status"
-        echo "  ${C_BOLD}5)${C_RESET} Update derod (release or community-dev)"
-        echo "  ${C_BOLD}6)${C_RESET} Build derod from community-dev source"
-        echo "  ${C_BOLD}7)${C_RESET} Reconfigure"
-        echo "  ${C_BOLD}8)${C_RESET} Show command line (dry-run)"
-        echo "  ${C_BOLD}9)${C_RESET} Snapshot chain state (tar.zst)"
-        echo "  ${C_BOLD}10)${C_RESET} Restore chain state from snapshot"
-        echo "  ${C_BOLD}11)${C_RESET} Resync: wipe chain + re-bootstrap (fastsync)"
-        echo "  ${C_BOLD}12)${C_RESET} View node logs (tail -f)"
-        echo "  ${C_BOLD}13)${C_RESET} Uninstall: remove derod + all node data (keep deronode)"
-        echo "  ${C_BOLD}14)${C_RESET} Send snapshot to a friend (thruflux)"
-        echo "  ${C_BOLD}15)${C_RESET} Receive snapshot from a friend (thruflux)"
+        echo "  ${C_BOLD}5)${C_RESET} View node logs (tail -f)"
+        echo "  ${C_BOLD}6)${C_RESET} Update derod (release or community-dev)"
+        echo "  ${C_BOLD}7)${C_RESET} Build derod from community-dev source"
+        echo "  ${C_BOLD}8)${C_RESET} Reconfigure"
+        echo "  ${C_BOLD}9)${C_RESET} Show command line (dry-run)"
+        echo "  ${C_BOLD}10)${C_RESET} Snapshot chain state (tar.zst)"
+        echo "  ${C_BOLD}11)${C_RESET} Restore chain state from snapshot"
+        echo "  ${C_BOLD}12)${C_RESET} Resync: wipe chain + re-bootstrap (fastsync)"
+        echo "  ${C_BOLD}13)${C_RESET} Share snapshot (thruflux)"
+        echo "  ${C_BOLD}14)${C_RESET} Receive snapshot (thruflux)"
+        echo "  ${C_BOLD}15)${C_RESET} Uninstall: remove derod + all node data (keep deronode)"
         echo "  ${C_BOLD}q)${C_RESET} Quit"
         local a
         ask a "Choose" ""
@@ -350,7 +350,8 @@ menu() {
             2) ACTION=start; AS_SERVICE=true; return ;;
             3) ACTION=stop; return ;;
             4) ACTION=status; return ;;
-            5) echo "    Update source:"
+            5) ACTION=logs; return ;;
+            6) echo "    Update source:"
                echo "      1) Latest release (download)"
                echo "      2) community-dev source (compile)"
                ask pick "Choose" "1"
@@ -359,16 +360,14 @@ menu() {
                    *) UPDATE_SOURCE=release ;;
                esac
                ACTION=update; return ;;
-            6) ACTION=build; return ;;
-            7) ACTION=reconfigure; return ;;
-            8) ACTION=start; DRY_RUN=true; return ;;
-            9) ACTION=snapshot; return ;;
-            10) ACTION=restore; return ;;
-            11) ACTION=resync; return ;;
-            12) ACTION=logs; return ;;
-            13) ACTION=uninstall; return ;;
-            14) ACTION=send; return ;;
-            15) echo "    Enter the join code your friend shared:"
+            7) ACTION=build; return ;;
+            8) ACTION=reconfigure; return ;;
+            9) ACTION=start; DRY_RUN=true; return ;;
+            10) ACTION=snapshot; return ;;
+            11) ACTION=restore; return ;;
+            12) ACTION=resync; return ;;
+            13) ACTION=send; return ;;
+            14) echo "    Enter the join code:"
                 ask code "Join code" ""
                 if [ -n "$code" ]; then
                     RECEIVE_CODE="$code"
@@ -376,6 +375,7 @@ menu() {
                 fi
                 echo "${C_ERR}[x] No join code entered${C_RESET}" >&2
                 ;;
+            15) ACTION=uninstall; return ;;
             q|Q) exit 0 ;;
             *) echo "${C_ERR}[x] Unknown choice${C_RESET}" >&2 ;;
         esac

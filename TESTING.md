@@ -253,7 +253,7 @@ exits 1 and suggests the right stream (`journalctl --user -u deronode.service
 menu mode returns to the prompt. (Sections 14 bash / 9 ps cover the
 parse/menu/dispatch wiring and the tail-selection logic.)
 
-Uninstall command: `deronode uninstall` (menu option 13) removes the managed
+Uninstall command: `deronode uninstall` (menu option 15) removes the managed
 node completely — stops derod, removes the service unit (systemd user unit /
 LaunchAgent / pid fallback), and deletes the binary, chain data, logs,
 snapshots, and `config.json`. deronode itself stays installed, so the next
@@ -272,10 +272,10 @@ bash node.sh uninstall --yes            # wipes node + data; deronode stays
 bash node.sh status                     # "No derod installed yet" first-run menu
 ```
 
-Send/receive (thruflux): `deronode send [<archive>]` (menu option 14) hosts
+Send/receive (thruflux): `deronode send [<archive>]` (menu option 13) hosts
 the newest snapshot — or an explicit path — via `thru host`, printing a join
-code the friend uses with `thru join <code>` (or `deronode receive <code>`,
-menu option 15 — which prompts for the join code).
+code the receiver uses with `thru join <code>` (or `deronode receive <code>`,
+menu option 14 — which prompts for the join code).
 Thruflux is a peer-to-peer QUIC transfer CLI (encrypted streams, ICE NAT
 traversal with TURN fallback, self-hostable signaling server); deronode only
 shells out to it. When `thru` is missing, an interactive run is asked
