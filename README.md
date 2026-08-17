@@ -66,6 +66,11 @@ deronode logs                   tail the node log live (Ctrl-C to stop)
 deronode uninstall              remove derod + all node data (binary, chain, logs,
                                  snapshots, config); keeps deronode itself
                                  (prompts for confirmation; --yes skips it)
+deronode send [<archive>]        share a snapshot (or any file) with a friend via
+                                 thruflux — prints a join code (fast, encrypted QUIC
+                                 P2P); defaults to the newest snapshot
+                                 (thruflux CLI: https://github.com/samsungplay/Thruflux)
+deronode receive <code>          receive a thruflux transfer into --out (default .)
 deronode --reconfigure          re-run the first-run prompts (incl. data-dir / log-dir)
 deronode --dry-run              resolve nothing; print the derod command line
 deronode --help                 full flag reference
@@ -76,8 +81,8 @@ Both `--flag=value` and `--flag value` are accepted.
 
 The interactive menu (`deronode` with no arguments) returns to the menu after
 each action completes — stop, status, update, build, snapshot, restore, resync,
-logs, uninstall, even foreground `start` (once the node exits) — so you stay in
-the menu until you press `q`.
+logs, uninstall, send, even foreground `start` (once the node exits) — so you
+stay in the menu until you press `q`.
 
 ### Building from source (community-dev)
 
@@ -165,6 +170,44 @@ start path. Restore refuses while any derod runs, so the node is guaranteed
 stopped at that point. The prompt only appears on an interactive terminal and
 never with `--yes`, so scripted restores restore and leave the node stopped,
 as before.
+
+### Sending a snapshot to a friend
+
+`deronode send` shares your latest snapshot (or any file: `deronode send
+<path>`) with anyone, over the internet, fast and encrypted — it shells out to
+[thruflux](https://github.com/samsungplay/Thruflux), a peer-to-peer QUIC file
+transfer CLI. The sender runs `thru host <archive>` (which deronode invokes)
+and gets a high-entropy join code; the friend runs `thru join <code>` — or
+`deronode receive <code>` — on any OS and downloads directly peer-to-peer
+(ICE NAT traversal with TURN fallback; nothing is uploaded to a cloud).
+Thruflux uses encrypted QUIC streams with WSS signaling, so the transfer is
+secure against MITM and the relay never sees plaintext. For guaranteed
+capacity you can self-host the signaling server (`thru server`).
+
+```bash
+deronode send                     # newest snapshot -> join code to share
+deronode send /path/to/file.bin   # any file, same flow
+deronode receive ABCDEFGH         # friend side; files land in ./ (or --out <dir>)
+```
+
+`thru` must be installed once per machine. When it's missing, deronode asks
+**"Install thruflux now?"** (default yes) and downloads the static binary
+itself into `~/.local/bin` on confirmation (raising UDP buffers to 16 MiB
+best-effort on Linux) — scripted/piped runs never install unattended and
+just print the manual download hint. deronode fetches the binary directly
+from `raw.githubusercontent.com` because the upstream one-line installers
+currently 404: they download `thru` from a
+`github.com/.../raw/refs/heads/main/...` URL that GitHub no longer serves
+for large blobs. Manual install, if you prefer:
+
+```bash
+# Linux:   curl -fsSL https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/linux/thru_linux \
+#            -o ~/.local/bin/thru && chmod +x ~/.local/bin/thru
+# macOS:   curl -fsSL https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/macos/thru_mac \
+#            -o ~/.local/bin/thru && chmod +x ~/.local/bin/thru
+# Windows: curl -fsSL https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/windows/thru_windows.exe \
+#            -o ~/.local/bin/thru.exe
+```
 
 ### Common examples
 

@@ -13,8 +13,8 @@ explicitly stop it first.
 cd ~/Projects/deronode
 
 # Full smoke suites — self-contained, wipe and recreate their own bin/
-bash scripts/smoke-test.sh              # expect: 178 passed, 0 failed
-pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 150 passed, 0 failed
+bash scripts/smoke-test.sh              # expect: 189 passed, 0 failed
+pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 161 passed, 0 failed
 
 # Dry-run — offline proof: prints the exact derod argv, writes nothing
 bash node.sh --dry-run --sync-profile=pruned --data-dir=/tmp/d1 --log-dir=/tmp/d2
@@ -271,6 +271,22 @@ bash node.sh uninstall --dry-run        # prints the wipe plan, writes nothing
 bash node.sh uninstall --yes            # wipes node + data; deronode stays
 bash node.sh status                     # "No derod installed yet" first-run menu
 ```
+
+Send/receive (thruflux): `deronode send [<archive>]` (menu option 14) hosts
+the newest snapshot — or an explicit path — via `thru host`, printing a join
+code the friend uses with `thru join <code>` (or `deronode receive <code>`).
+Thruflux is a peer-to-peer QUIC transfer CLI (encrypted streams, ICE NAT
+traversal with TURN fallback, self-hostable signaling server); deronode only
+shells out to it. When `thru` is missing, an interactive run is asked
+**"Install thruflux now?"** (default yes) and deronode downloads the static
+binary itself into `~/.local/bin` (raising UDP buffers to 16 MiB best-effort
+on Linux) — piped/scripted runs never install unattended and just get the
+manual hint. This bypasses the upstream one-line installers, whose
+`github.com/.../raw/refs/heads/main/...` download URL currently 404s; the
+binaries live at the working `raw.githubusercontent.com/.../main/...`
+equivalent. `--dry-run` prints the exact `thru host` / `thru join` argv
+without transferring anything. (Sections 14 bash / 9 ps cover the wiring +
+install prompt.)
 
 Manual smoke against the real (stopped) node:
 

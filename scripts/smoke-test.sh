@@ -885,6 +885,68 @@ if echo "$uninst_src" | grep -q 'stays installed' && echo "$uninst_src" | grep -
 else
     fail "cmd_uninstall keeps deronode itself + supports dry-run"
 fi
+# send/receive (thruflux): parse, menu, dispatch, host/join wrappers
+if grep -q 'send) ACTION="send"' node.sh && grep -q '14) ACTION=send' node.sh && grep -qE 'send\) +cmd_send ;;' node.sh && grep -qE 'receive\) +cmd_receive ;;' node.sh; then
+    pass "send/receive wired into parse/menu/dispatch"
+else
+    fail "send/receive wired into parse/menu/dispatch"
+fi
+send_src="$(sed -n '/^cmd_send()/,/^}/p' node.sh)"
+if echo "$send_src" | grep -q 'thru host' && echo "$send_src" | grep -q 'snapshot_latest_archive' && echo "$send_src" | grep -q 'thru_ensure'; then
+    pass "cmd_send hosts the newest snapshot via thruflux"
+else
+    fail "cmd_send hosts the newest snapshot via thruflux"
+fi
+recv_src="$(sed -n '/^cmd_receive()/,/^}/p' node.sh)"
+if echo "$recv_src" | grep -q 'thru join' && echo "$recv_src" | grep -q 'RECEIVE_CODE' && echo "$recv_src" | grep -q 'thru_ensure'; then
+    pass "cmd_receive joins a thruflux code"
+else
+    fail "cmd_receive joins a thruflux code"
+fi
+if grep -q 'thru_install_hint' node.sh && grep -q 'samsungplay/Thruflux' node.sh; then
+    pass "send/receive hint at installing thruflux per-OS"
+else
+    fail "send/receive hint at installing thruflux per-OS"
+fi
+thru_ensure_src="$(sed -n '/^thru_ensure()/,/^}/p' node.sh)"
+if echo "$thru_ensure_src" | grep -q 'Install thruflux now' && echo "$thru_ensure_src" | grep -q 'thru_install'; then
+    pass "thru_ensure proposes installing thruflux on a tty"
+else
+    fail "thru_ensure proposes installing thruflux on a tty"
+fi
+if echo "$thru_ensure_src" | grep -q '\[ -t 0 \]' && echo "$thru_ensure_src" | grep -q 'yesno'; then
+    pass "thru_ensure only prompts on a tty (scripted runs get the hint only)"
+else
+    fail "thru_ensure only prompts on a tty (scripted runs get the hint only)"
+fi
+thru_url_src="$(sed -n '/^thru_binary_url()/,/^}/p' node.sh)"
+if echo "$thru_url_src" | grep -q 'raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries' \
+   && echo "$thru_url_src" | grep -q 'thru_linux' && echo "$thru_url_src" | grep -q 'thru_mac' && echo "$thru_url_src" | grep -q 'thru_windows.exe'; then
+    pass "thru_binary_url maps each OS to a raw.githubusercontent binary (upstream 404 workaround)"
+else
+    fail "thru_binary_url maps each OS to a raw.githubusercontent binary (upstream 404 workaround)"
+fi
+thru_install_src="$(sed -n '/^thru_install()/,/^}/p' node.sh)"
+if echo "$thru_install_src" | grep -q '.local/bin' && echo "$thru_install_src" | grep -q 'chmod +x' && echo "$thru_install_src" | grep -q 'curl -fsSL'; then
+    pass "thru_install drops the binary into ~/.local/bin + makes it executable"
+else
+    fail "thru_install drops the binary into ~/.local/bin + makes it executable"
+fi
+if echo "$thru_install_src" | grep -q 'sysctl' && echo "$thru_install_src" | grep -q '16777216'; then
+    pass "thru_install raises UDP buffers best-effort (16 MiB)"
+else
+    fail "thru_install raises UDP buffers best-effort (16 MiB)"
+fi
+if echo "$thru_ensure_src" | grep -q 'export PATH=' && echo "$thru_ensure_src" | grep -q 'command -v thru'; then
+    pass "thru_ensure adds ~/.local/bin to PATH after install"
+else
+    fail "thru_ensure adds ~/.local/bin to PATH after install"
+fi
+if grep -q 'thru_binary_url' node.sh && grep -q 'install_linux.sh' node.sh; then
+    pass "code comments document the broken upstream installer URL (404)"
+else
+    fail "code comments document the broken upstream installer URL (404)"
+fi
 
 # 15. Snapshot prompts — confirm-new-snapshot + prompt-to-stop (stub-extracted
 # from node.sh). yesno answers dispatch on the prompt text: the confirm-new

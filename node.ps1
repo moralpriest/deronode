@@ -40,6 +40,8 @@ $script:SnapshotMaxRatio = $false
 $script:SnapshotKeepRunning = $false
 $script:SnapshotYes = $false
 $script:UpdateSource = 'release'   # update source: release (download) | dev (community-dev compile)
+$script:SendArchive = ''           # archive to share with thruflux (default: newest snapshot)
+$script:ReceiveCode = ''           # thruflux join code to receive
 
 function Show-Help {
     @'
@@ -61,6 +63,10 @@ Usage: deronode [command] [options]
     logs                 Tail the node log (derod.log; follows live)
     uninstall            Remove derod + all node data (binary, chain, logs,
                          snapshots, config); keeps deronode itself
+    send [<archive>]     Share a snapshot (or any file) with a friend via
+                         thruflux: thru host, prints a join code (fast, encrypted
+                         QUIC P2P). Defaults to the newest snapshot.
+    receive <code>       Receive a thruflux transfer: thru join <code>
     --reconfigure        Re-run the first-run prompts (incl. data-dir / log-dir)
 
   Options:
@@ -92,7 +98,7 @@ Usage: deronode [command] [options]
     --extra-arg=<raw>    Append a raw derod argument (repeatable)
     --level=<n>          Snapshot zstd level (default 10; --max-ratio forces 19)
     --max-ratio          Snapshot at maximum compression (zstd level 19)
-    --out=<dir>          Snapshot output dir (overrides snapshot_dir)
+    --out=<dir>          Snapshot output dir; receive output dir (default .)
     --keep-running       Allow snapshot while derod runs on this data dir
     --from=<archive>     Archive to restore (restore)
     --yes                Skip snapshot/restore/resync/uninstall confirmations
@@ -117,6 +123,12 @@ function Parse-Args {
         if ($valFlags -contains $a) {
             if ($i + 1 -ge $Tokens.Count) { Write-Host "[x] Missing value for $a" -ForegroundColor Red; exit 1 }
             $norm.Add("$a=$($Tokens[$i+1])"); $i++
+        } elseif ($a -eq 'send' -and $i + 1 -lt $Tokens.Count -and $Tokens[$i+1] -notlike '--*') {
+            # `send <archive>` — positional archive after the command.
+            $norm.Add('send'); $script:SendArchive = $Tokens[$i+1]; $i++
+        } elseif ($a -eq 'receive' -and $i + 1 -lt $Tokens.Count -and $Tokens[$i+1] -notlike '--*') {
+            # `receive <code>` — positional join code after the command.
+            $norm.Add('receive'); $script:ReceiveCode = $Tokens[$i+1]; $i++
         } else { $norm.Add($a) }
     }
     foreach ($a in $norm) {
@@ -171,6 +183,8 @@ function Parse-Args {
             'resync' { $script:Action = 'resync' }
             'logs' { $script:Action = 'logs' }
             'uninstall' { $script:Action = 'uninstall' }
+            'send' { $script:Action = 'send' }
+            'receive' { $script:Action = 'receive' }
             default { Write-Host "[x] Unknown: $a" -ForegroundColor Red; exit 1 }
         }
     }
@@ -291,6 +305,7 @@ function Show-Menu {
         Write-Host '  11) Resync: wipe chain + re-bootstrap (fastsync)'
         Write-Host '  12) View node logs (tail -f)'
         Write-Host '  13) Uninstall: remove derod + all node data (keep deronode)'
+        Write-Host '  14) Send snapshot to a friend (thruflux)'
         Write-Host '  q) Quit'
         $a = Read-Ask 'Choose' ''
         switch ($a) {
@@ -315,6 +330,7 @@ function Show-Menu {
             '11' { $script:Action = 'resync'; return }
             '12' { $script:Action = 'logs'; return }
             '13' { $script:Action = 'uninstall'; return }
+            '14' { $script:Action = 'send'; return }
             'q' { exit 0 }
             default { Write-Host '[x] Unknown choice' -ForegroundColor Red }
         }
@@ -736,6 +752,135 @@ function Uninstall-Node {
     Write-Host '[*] derod removed - deronode stays installed. Re-run the menu to configure a fresh node.' -ForegroundColor Green
 }
 
+# thruflux is a peer-to-peer QUIC file-transfer CLI (thru host / thru join).
+# We shell out to it for `send`/`receive`; it must be installed separately.
+#
+# NOTE: the upstream one-line installers (install_linux.sh / install_macos.sh
+# / install_windows.ps1) are currently BROKEN — they download `thru` from a
+# github.com/.../raw/refs/heads/main/... URL that returns 404 (GitHub serves
+# large blobs differently on that route). The binaries exist at the
+# raw.githubusercontent.com/.../main/... equivalent, so we fetch them
+# directly instead of piping the installer.
+function Get-ThrufluxBinaryUrl {
+    if ($script:IsWindows) {
+        return 'https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/windows/thru_windows.exe'
+    } elseif ($script:IsMacOS) {
+        return 'https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/macos/thru_mac'
+    }
+    return 'https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/linux/thru_linux'
+}
+
+function Get-ThrufluxInstallHint {
+    $binDir = Join-Path $HOME '.local/bin'
+    $url = Get-ThrufluxBinaryUrl
+    if ($script:IsWindows) {
+        return "  mkdir -p '$binDir'; curl -fsSL '$url' -o '$binDir/thru.exe'"
+    }
+    return "  mkdir -p '$binDir'; curl -fsSL '$url' -o '$binDir/thru' && chmod +x '$binDir/thru'"
+}
+
+# Install the thruflux CLI: download the static binary into ~/.local/bin
+# (deronode already puts its launcher there). Prints progress; returns $true
+# on success.
+function Install-Thruflux {
+    $binDir = Join-Path $HOME '.local/bin'
+    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+    $url = Get-ThrufluxBinaryUrl
+    $target = if ($script:IsWindows) { Join-Path $binDir 'thru.exe' } else { Join-Path $binDir 'thru' }
+    Write-Host '[*] downloading thruflux...' -ForegroundColor DarkCyan
+    Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing -ErrorAction Stop
+    if (-not $script:IsWindows) {
+        & chmod +x $target 2>$null | Out-Null
+    }
+    return $true
+}
+
+# Ensure the thruflux CLI is available. Interactive runs are asked to install
+# it on the spot (default yes); piped/scripted runs and non-tty invocations
+# only get the manual install hint, so nothing is ever installed unattended.
+# Returns $true when `thru` is usable, $false otherwise.
+function Ensure-Thruflux {
+    if (Get-Command thru -ErrorAction SilentlyContinue) { return $true }
+    Write-Host '[x] thruflux CLI (thru) not found.' -ForegroundColor Red
+    if ((Test-StdinInteractive) -and (Read-YesNo 'Install thruflux now?' 'y')) {
+        Write-Host '[*] installing thruflux...' -ForegroundColor DarkCyan
+        # Install-Thruflux must run through Out-Host: its output has to be
+        # shown, but must NOT join this function's pipeline, or the return
+        # value below becomes a non-empty array (truthy) and the `exit 1`
+        # guard in the callers is skipped — exactly the bug where send
+        # continued to `thru host` after a failed install. Success/failure is
+        # decided by try/catch, not by the piped output.
+        try {
+            Install-Thruflux 2>&1 | Out-Host
+            # Make it usable for the rest of this session even when
+            # ~/.local/bin is not on PATH yet (deronode's installer adds it
+            # to the shell rc, but that only applies to new shells). PATH
+            # separator is ';' on Windows but ':' on Linux/macOS.
+            if (-not (Get-Command thru -ErrorAction SilentlyContinue)) {
+                $sep = if ($script:IsWindows) { ';' } else { ':' }
+                $env:PATH = "$(Join-Path $HOME '.local/bin')$sep$env:PATH"
+            }
+            if (Get-Command thru -ErrorAction SilentlyContinue) {
+                Write-Host "[*] thruflux installed: $((Get-Command thru).Source)" -ForegroundColor Green
+            } else {
+                Write-Host "[*] thruflux installed at $(Join-Path $HOME '.local/bin/thru') - add ~/.local/bin to your PATH." -ForegroundColor Green
+            }
+            return $true
+        } catch {
+            Write-Host "[x] thruflux install failed: $($_.Exception.Message)" -ForegroundColor Red
+        }
+    }
+    Write-Host (Get-ThrufluxInstallHint)
+    return $false
+}
+
+# Send-Snapshot — share a snapshot (or any file) with a friend over the
+# internet, fast + encrypted, via thruflux: `thru host <archive>` prints a join
+# code the friend uses with `thru join <code>` (or `deronode receive <code>`).
+# Defaults to the newest snapshot in the snapshot dir; pass an explicit path
+# to send any file. Needs the thruflux CLI (see Get-ThrufluxInstallHint).
+function Send-Snapshot {
+    Resolve-Paths
+    $archive = $script:SendArchive
+    if (-not $archive) {
+        $archive = Get-LatestSnapshotArchive
+        if (-not $archive) {
+            Write-Host "[x] no snapshot found in $($script:SnapshotDirReal) - pass a file: deronode send <path>" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "[*] using latest snapshot: $(Split-Path -Leaf $archive)" -ForegroundColor DarkCyan
+    }
+    if (-not (Test-Path $archive)) {
+        Write-Host "[x] file not found: $archive" -ForegroundColor Red
+        exit 1
+    }
+    if ($script:DryRun) {
+        Write-Host "[*] dry-run: would run: thru host $archive" -ForegroundColor DarkCyan
+        Write-Host '[*] your friend then runs: thru join <code> --out <dir>  (or: deronode receive <code>)' -ForegroundColor DarkCyan
+        return
+    }
+    if (-not (Ensure-Thruflux)) { exit 1 }
+    Write-Host "[*] hosting $archive - share the join code with your friend" -ForegroundColor DarkCyan
+    & thru host $archive
+}
+
+# Receive-Snapshot — receive a thruflux transfer from a friend: `thru join
+# <code>` writes the files into --out (default .). Needs the thruflux CLI.
+function Receive-Snapshot {
+    if (-not $script:ReceiveCode) {
+        Write-Host '[x] usage: deronode receive <code> [--out <dir>]' -ForegroundColor Red
+        exit 1
+    }
+    if ($script:DryRun) {
+        $out = if ($script:SnapshotOut) { $script:SnapshotOut } else { '.' }
+        Write-Host "[*] dry-run: would run: thru join $($script:ReceiveCode) --out $out" -ForegroundColor DarkCyan
+        return
+    }
+    if (-not (Ensure-Thruflux)) { exit 1 }
+    $out = if ($script:SnapshotOut) { $script:SnapshotOut } else { '.' }
+    & thru join $script:ReceiveCode --out $out
+}
+
 function Invoke-Snapshot {
     Resolve-Paths
     $script:SnapshotDir = if ($script:SnapshotOut) { $script:SnapshotOut } else { $script:SnapshotDirReal }
@@ -801,6 +946,8 @@ switch ($script:Action) {
     'resync' { Invoke-Resync }
     'logs' { Show-Logs }
     'uninstall' { Uninstall-Node }
+    'send' { Send-Snapshot }
+    'receive' { Receive-Snapshot }
     default {
         # Menu-driven: dispatch the chosen action, then come back to the menu
         # instead of exiting (q in the menu quits).
@@ -818,6 +965,8 @@ switch ($script:Action) {
                 'resync' { Invoke-Resync }
                 'logs' { Show-Logs }
                 'uninstall' { Uninstall-Node }
+                'send' { Send-Snapshot }
+                'receive' { Receive-Snapshot }
                 'reconfigure' { Reconfigure-Node }
             }
         }

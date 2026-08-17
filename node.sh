@@ -51,6 +51,8 @@ SNAPSHOT_MAX_RATIO=false
 SNAPSHOT_KEEP_RUNNING=false
 SNAPSHOT_YES=false
 UPDATE_SOURCE="release"   # update source: release (download) | dev (community-dev compile)
+SEND_ARCHIVE=""           # archive to share with thruflux (default: newest snapshot)
+RECEIVE_CODE=""           # thruflux join code to receive
 
 # ── Help ──
 show_help() {
@@ -73,6 +75,10 @@ Usage: deronode [command] [options]
     logs                 Tail the node log (derod.log; follows live)
     uninstall            Remove derod + all node data (binary, chain, logs,
                          snapshots, config); keeps deronode itself
+    send [<archive>]     Share a snapshot (or any file) with a friend via
+                         thruflux: thru host, prints a join code (fast, encrypted
+                         QUIC P2P). Defaults to the newest snapshot.
+    receive <code>       Receive a thruflux transfer: thru join <code>
     --reconfigure        Re-run the first-run prompts (incl. data-dir / log-dir)
 
   Options:
@@ -104,7 +110,7 @@ Usage: deronode [command] [options]
     --extra-arg=<raw>    Append a raw derod argument (repeatable)
     --level=<n>          Snapshot zstd level (default 10; --max-ratio forces 19)
     --max-ratio          Snapshot at maximum compression (zstd level 19)
-    --out=<dir>          Snapshot output dir (overrides snapshot_dir)
+    --out=<dir>          Snapshot output dir; receive output dir (default .)
     --keep-running       Allow snapshot while derod runs on this data dir
     --from=<archive>     Archive to restore (restore)
     --yes                Skip snapshot/restore/resync/uninstall confirmations
@@ -180,6 +186,13 @@ parse_cli_args() {
             resync) ACTION="resync"; shift ;;
             logs) ACTION="logs"; shift ;;
             uninstall) ACTION="uninstall"; shift ;;
+            send) ACTION="send"; shift
+                  # Optional positional archive: `send <path>`. Only capture
+                  # non-flag tokens (send --dry-run must not eat the flag).
+                  if [ -n "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then SEND_ARCHIVE="$1"; shift; fi ;;
+            receive) ACTION="receive"; shift
+                  # Required positional join code: `receive <code>`.
+                  if [ -n "${1:-}" ] && [ "${1#--}" = "${1:-}" ]; then RECEIVE_CODE="$1"; shift; fi ;;
             *) echo "${C_ERR}[x] Unknown: $1${C_RESET}" >&2; show_help >&2; exit 1 ;;
         esac
     done
@@ -327,6 +340,7 @@ menu() {
         echo "  ${C_BOLD}11)${C_RESET} Resync: wipe chain + re-bootstrap (fastsync)"
         echo "  ${C_BOLD}12)${C_RESET} View node logs (tail -f)"
         echo "  ${C_BOLD}13)${C_RESET} Uninstall: remove derod + all node data (keep deronode)"
+        echo "  ${C_BOLD}14)${C_RESET} Send snapshot to a friend (thruflux)"
         echo "  ${C_BOLD}q)${C_RESET} Quit"
         local a
         ask a "Choose" ""
@@ -352,6 +366,7 @@ menu() {
             11) ACTION=resync; return ;;
             12) ACTION=logs; return ;;
             13) ACTION=uninstall; return ;;
+            14) ACTION=send; return ;;
             q|Q) exit 0 ;;
             *) echo "${C_ERR}[x] Unknown choice${C_RESET}" >&2 ;;
         esac
@@ -786,6 +801,129 @@ cmd_uninstall() {
     echo "${C_OK}[*] derod removed — deronode stays installed. Re-run the menu to configure a fresh node.${C_RESET}"
 }
 
+# thruflux is a peer-to-peer QUIC file-transfer CLI (thru host / thru join).
+# We shell out to it for `send`/`receive`; it must be installed separately.
+#
+# NOTE: the upstream one-line installers (install_linux.sh / install_macos.sh
+# / install_windows.ps1) are currently BROKEN — they download `thru` from a
+# github.com/.../raw/refs/heads/main/... URL that returns 404 (GitHub serves
+# large blobs differently on that route). The binaries exist at the
+# raw.githubusercontent.com/.../main/... equivalent, so we fetch them
+# directly instead of piping the installer.
+thru_binary_url() {
+    case "$OS" in
+        darwin)  echo "https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/macos/thru_mac" ;;
+        windows) echo "https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/windows/thru_windows.exe" ;;
+        *)       echo "https://raw.githubusercontent.com/samsungplay/Thruflux/main/frontend/binaries/linux/thru_linux" ;;
+    esac
+}
+
+thru_install_hint() {
+    local url="$(thru_binary_url)" bin_dir="$HOME/.local/bin"
+    if [ "$OS" = "windows" ]; then
+        echo "  mkdir -p '$bin_dir' && curl -fsSL '$url' -o '$bin_dir/thru.exe'"
+    else
+        echo "  mkdir -p '$bin_dir' && curl -fsSL '$url' -o '$bin_dir/thru' && chmod +x '$bin_dir/thru'"
+    fi
+}
+
+# Install the thruflux CLI: download the static binary into ~/.local/bin
+# (deronode already puts its launcher there) and raise the UDP socket buffers
+# so thruflux can actually use them (matches the upstream installer's tuning;
+# best-effort, needs root). Prints progress; returns 0 on success.
+thru_install() {
+    local url="$(thru_binary_url)" bin_dir="$HOME/.local/bin" target="thru"
+    [ "$OS" = "windows" ] && target="thru.exe"
+    mkdir -p "$bin_dir" || return 1
+    echo "${C_INFO}[*] downloading thruflux...${C_RESET}" >&2
+    curl -fsSL --progress-bar "$url" -o "$bin_dir/$target" || return 1
+    chmod +x "$bin_dir/$target" 2>/dev/null || true
+    # Best-effort UDP buffer tuning (16 MiB like the upstream installer).
+    if [ "$OS" = "linux" ] && command -v sysctl >/dev/null 2>&1; then
+        if [ "$(id -u)" -eq 0 ]; then
+            sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216 \
+                   net.core.rmem_default=16777216 net.core.wmem_default=16777216 >/dev/null 2>&1 || true
+        elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+            sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216 \
+                 net.core.rmem_default=16777216 net.core.wmem_default=16777216 >/dev/null 2>&1 || true
+        fi
+    fi
+    return 0
+}
+
+# Ensure the thruflux CLI is available. Interactive runs are asked to install
+# it on the spot (default yes); piped/scripted runs and non-tty invocations
+# only get the manual install hint, so nothing is ever installed unattended.
+# Returns 0 when `thru` is usable, 1 otherwise.
+thru_ensure() {
+    command -v thru >/dev/null 2>&1 && return 0
+    echo "${C_ERR}[x] thruflux CLI (thru) not found.${C_RESET}" >&2
+    if [ -t 0 ] && [ "$(yesno "Install thruflux now?" y)" = "y" ]; then
+        if thru_install; then
+            # Make it usable for the rest of this session even when
+            # ~/.local/bin is not on PATH yet (deronode's installer adds it
+            # to the shell rc, but that only applies to new shells).
+            if ! command -v thru >/dev/null 2>&1; then
+                export PATH="$HOME/.local/bin:$PATH"
+            fi
+            if command -v thru >/dev/null 2>&1; then
+                echo "${C_OK}[*] thruflux installed: $(command -v thru)${C_RESET}" >&2
+            else
+                echo "${C_OK}[*] thruflux installed at $HOME/.local/bin/$([ "$OS" = "windows" ] && echo thru.exe || echo thru) — add ~/.local/bin to your PATH.${C_RESET}" >&2
+            fi
+            return 0
+        fi
+        echo "${C_ERR}[x] thruflux install failed — install it manually with:${C_RESET}" >&2
+    fi
+    thru_install_hint >&2
+    return 1
+}
+
+# cmd_send — share a snapshot (or any file) with a friend over the internet,
+# fast + encrypted, via thruflux: `thru host <archive>` prints a join code the
+# friend uses with `thru join <code>` (or `deronode receive <code>`). Defaults
+# to the newest snapshot in the snapshot dir; pass an explicit path to send
+# any file. Needs the thruflux CLI (see thru_install_hint).
+cmd_send() {
+    resolve_paths
+    local archive="$SEND_ARCHIVE"
+    if [ -z "$archive" ]; then
+        archive="$(snapshot_latest_archive)"
+        if [ -z "$archive" ]; then
+            echo "${C_ERR}[x] no snapshot found in ${SNAPSHOT_DIR_REAL:-$INSTALL_DIR/snapshots} — pass a file: deronode send <path>${C_RESET}" >&2
+            return 1
+        fi
+        echo "${C_INFO}[*] using latest snapshot: $(basename "$archive")${C_RESET}" >&2
+    fi
+    if [ ! -f "$archive" ]; then
+        echo "${C_ERR}[x] file not found: $archive${C_RESET}" >&2
+        return 1
+    fi
+    if $DRY_RUN; then
+        echo "${C_INFO}[*] dry-run: would run: thru host $archive${C_RESET}"
+        echo "${C_INFO}[*] your friend then runs: thru join <code> --out <dir>  (or: deronode receive <code>)${C_RESET}"
+        return 0
+    fi
+    thru_ensure || return 1
+    echo "${C_INFO}[*] hosting $archive — share the join code with your friend${C_RESET}" >&2
+    thru host "$archive"
+}
+
+# cmd_receive — receive a thruflux transfer from a friend: `thru join <code>`
+# writes the files into --out (default .). Needs the thruflux CLI.
+cmd_receive() {
+    if [ -z "$RECEIVE_CODE" ]; then
+        echo "${C_ERR}[x] usage: deronode receive <code> [--out <dir>]${C_RESET}" >&2
+        return 1
+    fi
+    if $DRY_RUN; then
+        echo "${C_INFO}[*] dry-run: would run: thru join $RECEIVE_CODE --out ${SNAPSHOT_OUT:-.}${C_RESET}"
+        return 0
+    fi
+    thru_ensure || return 1
+    thru join "$RECEIVE_CODE" --out "${SNAPSHOT_OUT:-.}"
+}
+
 cmd_snapshot() {
     resolve_paths
     SNAPSHOT_DIR="${SNAPSHOT_OUT:-$SNAPSHOT_DIR_REAL}"
@@ -872,6 +1010,8 @@ case "$ACTION" in
     resync)      cmd_resync ;;
     logs)        cmd_logs ;;
     uninstall)   cmd_uninstall ;;
+    send)         cmd_send ;;
+    receive)      cmd_receive ;;
     *)           # Menu-driven: dispatch the chosen action, then come back to
                  # the menu instead of exiting (q in the menu quits). Nonzero
                  # action exits are swallowed so a failure shows the menu again
@@ -890,6 +1030,8 @@ case "$ACTION" in
                          resync)      cmd_resync      || true ;;
                          logs)        cmd_logs        || true ;;
                          uninstall)   cmd_uninstall   || true ;;
+                         send)         cmd_send        || true ;;
+                         receive)      cmd_receive     || true ;;
                          reconfigure) cmd_reconfigure || true ;;
                      esac
                  done ;;
