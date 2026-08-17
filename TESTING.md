@@ -13,8 +13,8 @@ explicitly stop it first.
 cd ~/Projects/deronode
 
 # Full smoke suites — self-contained, wipe and recreate their own bin/
-bash scripts/smoke-test.sh              # expect: 173 passed, 0 failed
-pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 144 passed, 0 failed
+bash scripts/smoke-test.sh              # expect: 178 passed, 0 failed
+pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 150 passed, 0 failed
 
 # Dry-run — offline proof: prints the exact derod argv, writes nothing
 bash node.sh --dry-run --sync-profile=pruned --data-dir=/tmp/d1 --log-dir=/tmp/d2
@@ -252,6 +252,25 @@ exits 1 and suggests the right stream (`journalctl --user -u deronode.service
 -f` for the systemd console output). `tail` follows live; Ctrl-C stops it and
 menu mode returns to the prompt. (Sections 14 bash / 9 ps cover the
 parse/menu/dispatch wiring and the tail-selection logic.)
+
+Uninstall command: `deronode uninstall` (menu option 13) removes the managed
+node completely — stops derod, removes the service unit (systemd user unit /
+LaunchAgent / pid fallback), and deletes the binary, chain data, logs,
+snapshots, and `config.json`. deronode itself stays installed, so the next
+menu run shows the fresh "No derod installed yet" first-run screen. It
+refuses on externally-managed nodes (we never touch data we don't own),
+confirms interactively (`--yes` skips), supports `--dry-run`, and guards
+against wiping `/` or an empty path even if `config.json` was pointed at
+something pathological. (Sections 14 bash / 9 ps cover the parse/menu/dispatch
+wiring, the wipe logic, and the new `Remove-Service` in lib/service.ps1.)
+
+Manual smoke:
+
+```bash
+bash node.sh uninstall --dry-run        # prints the wipe plan, writes nothing
+bash node.sh uninstall --yes            # wipes node + data; deronode stays
+bash node.sh status                     # "No derod installed yet" first-run menu
+```
 
 Manual smoke against the real (stopped) node:
 

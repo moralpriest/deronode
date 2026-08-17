@@ -59,6 +59,8 @@ Usage: deronode [command] [options]
     restore              Restore chain state from a snapshot (stops the node)
     resync               Wipe the chain and re-bootstrap via --fastsync
     logs                 Tail the node log (derod.log; follows live)
+    uninstall            Remove derod + all node data (binary, chain, logs,
+                         snapshots, config); keeps deronode itself
     --reconfigure        Re-run the first-run prompts (incl. data-dir / log-dir)
 
   Options:
@@ -93,7 +95,7 @@ Usage: deronode [command] [options]
     --out=<dir>          Snapshot output dir (overrides snapshot_dir)
     --keep-running       Allow snapshot while derod runs on this data dir
     --from=<archive>     Archive to restore (restore)
-    --yes                Skip snapshot/restore/resync confirmations
+    --yes                Skip snapshot/restore/resync/uninstall confirmations
     --version | -h       Version / help
 '@
 }
@@ -168,6 +170,7 @@ function Parse-Args {
             'restore' { $script:Action = 'restore' }
             'resync' { $script:Action = 'resync' }
             'logs' { $script:Action = 'logs' }
+            'uninstall' { $script:Action = 'uninstall' }
             default { Write-Host "[x] Unknown: $a" -ForegroundColor Red; exit 1 }
         }
     }
@@ -287,6 +290,7 @@ function Show-Menu {
         Write-Host '  10) Restore chain state from snapshot'
         Write-Host '  11) Resync: wipe chain + re-bootstrap (fastsync)'
         Write-Host '  12) View node logs (tail -f)'
+        Write-Host '  13) Uninstall: remove derod + all node data (keep deronode)'
         Write-Host '  q) Quit'
         $a = Read-Ask 'Choose' ''
         switch ($a) {
@@ -310,6 +314,7 @@ function Show-Menu {
             '10' { $script:Action = 'restore'; return }
             '11' { $script:Action = 'resync'; return }
             '12' { $script:Action = 'logs'; return }
+            '13' { $script:Action = 'uninstall'; return }
             'q' { exit 0 }
             default { Write-Host '[x] Unknown choice' -ForegroundColor Red }
         }
@@ -695,6 +700,42 @@ function Invoke-Resync {
     Start-Node
 }
 
+# Uninstall-Node — remove the managed node completely: stop it, remove the
+# service unit, and delete the binary, chain data, logs, snapshots, and
+# config.json. Keeps the deronode tool itself so the menu returns to the
+# fresh "No derod installed yet" first-run state. Refuses on
+# externally-managed nodes (we never touch data we don't own).
+function Uninstall-Node {
+    Resolve-Paths
+    if (Test-ExternalInstalled) {
+        Write-Host '[x] uninstall only works on a deronode-managed node (an external derod is installed).' -ForegroundColor Red
+        exit 1
+    }
+    if ($script:DryRun) {
+        Write-Host "[*] dry-run: would stop derod, remove the service unit, and delete $($script:DataDirReal), $($script:BinDir), $($script:LogDirReal), $($script:SnapshotDirReal), $($script:ConfigFile)" -ForegroundColor DarkCyan
+        return
+    }
+    Write-Host '[!] This removes the derod binary, chain data, logs, snapshots, and config.json.' -ForegroundColor Yellow
+    if (-not $script:SnapshotYes -and -not (Read-YesNo 'Continue?' 'n')) {
+        Write-Host '[x] Aborted.' -ForegroundColor Red
+        exit 1
+    }
+    # Safety guard: never wipe / or an empty path even if config.json was
+    # pointed at something pathological.
+    foreach ($dir in @($script:DataDirReal, $script:BinDir, $script:LogDirReal, $script:SnapshotDirReal)) {
+        if ([string]::IsNullOrEmpty($dir) -or $dir -eq '/') {
+            Write-Host "[x] Refusing to uninstall: $dir is not a removable path." -ForegroundColor Red
+            exit 1
+        }
+    }
+    Write-Host '[*] stopping derod...' -ForegroundColor DarkCyan
+    Remove-Service
+    Write-Host '[*] removing node data...' -ForegroundColor DarkCyan
+    Remove-Item $script:DataDirReal, $script:BinDir, $script:LogDirReal, $script:SnapshotDirReal -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $script:ConfigFile, "$($script:ConfigFile).bak", (Join-Path $script:InstallDir 'derod.pid'), (Join-Path $script:InstallDir 'run-derod.sh'), (Join-Path $script:InstallDir 'run-derod.ps1') -Force -ErrorAction SilentlyContinue
+    Write-Host '[*] derod removed - deronode stays installed. Re-run the menu to configure a fresh node.' -ForegroundColor Green
+}
+
 function Invoke-Snapshot {
     Resolve-Paths
     $script:SnapshotDir = if ($script:SnapshotOut) { $script:SnapshotOut } else { $script:SnapshotDirReal }
@@ -759,6 +800,7 @@ switch ($script:Action) {
     'restore' { Invoke-Restore }
     'resync' { Invoke-Resync }
     'logs' { Show-Logs }
+    'uninstall' { Uninstall-Node }
     default {
         # Menu-driven: dispatch the chosen action, then come back to the menu
         # instead of exiting (q in the menu quits).
@@ -775,6 +817,7 @@ switch ($script:Action) {
                 'restore' { Invoke-Restore }
                 'resync' { Invoke-Resync }
                 'logs' { Show-Logs }
+                'uninstall' { Uninstall-Node }
                 'reconfigure' { Reconfigure-Node }
             }
         }

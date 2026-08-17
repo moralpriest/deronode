@@ -63,6 +63,9 @@ deronode snapshot               create a privacy-hardened tar.zst of the chain s
 deronode restore --from=<file>  restore chain state from a snapshot (stops the node)
 deronode resync                 wipe the chain and re-bootstrap via --fastsync
 deronode logs                   tail the node log live (Ctrl-C to stop)
+deronode uninstall              remove derod + all node data (binary, chain, logs,
+                                 snapshots, config); keeps deronode itself
+                                 (prompts for confirmation; --yes skips it)
 deronode --reconfigure          re-run the first-run prompts (incl. data-dir / log-dir)
 deronode --dry-run              resolve nothing; print the derod command line
 deronode --help                 full flag reference
@@ -73,8 +76,8 @@ Both `--flag=value` and `--flag value` are accepted.
 
 The interactive menu (`deronode` with no arguments) returns to the menu after
 each action completes — stop, status, update, build, snapshot, restore, resync,
-logs, even foreground `start` (once the node exits) — so you stay in the menu
-until you press `q`.
+logs, uninstall, even foreground `start` (once the node exits) — so you stay in
+the menu until you press `q`.
 
 ### Building from source (community-dev)
 
@@ -178,6 +181,19 @@ deronode --testnet start
 # Repeatable raw passthrough for flags deronode does not model yet:
 deronode --extra-arg=--rpc-public --extra-arg=--tor-port=9051 start
 ```
+
+### Uninstall
+
+`deronode uninstall` (menu option 13) removes the managed node completely:
+it stops derod, deletes the service unit (systemd user unit / LaunchAgent /
+pid fallback), and removes the binary, chain data, logs, snapshots, and
+`config.json`. deronode itself stays installed — the next run shows the
+fresh "No derod installed yet" first-run screen, so you can re-configure a
+brand-new node. It refuses on externally-managed nodes (an external derod is
+installed elsewhere and we never touch data we don't own). The wipe is
+confirmed interactively (`--yes` skips the confirmation), supports
+`--dry-run`, and uninstall from the menu returns to the first-run screen
+instead of quitting.
 
 ## Configuration
 

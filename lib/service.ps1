@@ -189,3 +189,23 @@ function Stop-Service {
     Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
     Write-Host "[*] derod stopped" -ForegroundColor Green
 }
+
+function Remove-Service {
+    Stop-Service
+    switch (Get-ServiceBackend) {
+        'systemd' {
+            & systemctl --user disable deronode.service 2>$null | Out-Null
+            Remove-Item (Join-Path $HOME '.config/systemd/user/deronode.service') -Force -ErrorAction SilentlyContinue
+            & systemctl --user daemon-reload 2>$null | Out-Null
+            Write-Host '[*] systemd unit removed' -ForegroundColor DarkGray
+        }
+        'launchd' {
+            Remove-Item (Join-Path $HOME 'Library/LaunchAgents/org.deronode.derod.plist') -Force -ErrorAction SilentlyContinue
+            Write-Host '[*] LaunchAgent removed' -ForegroundColor DarkGray
+        }
+        default {
+            Write-Host '[*] pid backend has no unit to remove' -ForegroundColor DarkGray
+        }
+    }
+    Remove-Item (Join-Path $InstallDir 'derod.pid') -Force -ErrorAction SilentlyContinue
+}

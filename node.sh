@@ -71,6 +71,8 @@ Usage: deronode [command] [options]
     restore              Restore chain state from a snapshot (stops the node)
     resync               Wipe the chain and re-bootstrap via --fastsync
     logs                 Tail the node log (derod.log; follows live)
+    uninstall            Remove derod + all node data (binary, chain, logs,
+                         snapshots, config); keeps deronode itself
     --reconfigure        Re-run the first-run prompts (incl. data-dir / log-dir)
 
   Options:
@@ -105,7 +107,7 @@ Usage: deronode [command] [options]
     --out=<dir>          Snapshot output dir (overrides snapshot_dir)
     --keep-running       Allow snapshot while derod runs on this data dir
     --from=<archive>     Archive to restore (restore)
-    --yes                Skip snapshot/restore/resync confirmations
+    --yes                Skip snapshot/restore/resync/uninstall confirmations
     --version | -h       Version / help
 
   Examples:
@@ -177,6 +179,7 @@ parse_cli_args() {
             restore) ACTION="restore"; shift ;;
             resync) ACTION="resync"; shift ;;
             logs) ACTION="logs"; shift ;;
+            uninstall) ACTION="uninstall"; shift ;;
             *) echo "${C_ERR}[x] Unknown: $1${C_RESET}" >&2; show_help >&2; exit 1 ;;
         esac
     done
@@ -323,6 +326,7 @@ menu() {
         echo "  ${C_BOLD}10)${C_RESET} Restore chain state from snapshot"
         echo "  ${C_BOLD}11)${C_RESET} Resync: wipe chain + re-bootstrap (fastsync)"
         echo "  ${C_BOLD}12)${C_RESET} View node logs (tail -f)"
+        echo "  ${C_BOLD}13)${C_RESET} Uninstall: remove derod + all node data (keep deronode)"
         echo "  ${C_BOLD}q)${C_RESET} Quit"
         local a
         ask a "Choose" ""
@@ -347,6 +351,7 @@ menu() {
             10) ACTION=restore; return ;;
             11) ACTION=resync; return ;;
             12) ACTION=logs; return ;;
+            13) ACTION=uninstall; return ;;
             q|Q) exit 0 ;;
             *) echo "${C_ERR}[x] Unknown choice${C_RESET}" >&2 ;;
         esac
@@ -744,6 +749,43 @@ cmd_resync() {
     cmd_start
 }
 
+# cmd_uninstall — remove the managed node completely: stop it, remove the
+# service unit, and delete the binary, chain data, logs, snapshots, and
+# config.json. Keeps the deronode tool itself so the menu returns to the
+# fresh "No derod installed yet" first-run state. Refuses on
+# externally-managed nodes (we never touch data we don't own).
+cmd_uninstall() {
+    resolve_paths
+    if external_installed; then
+        echo "${C_ERR}[x] uninstall only works on a deronode-managed node (an external derod is installed).${C_RESET}" >&2
+        return 1
+    fi
+    if $DRY_RUN; then
+        echo "${C_INFO}[*] dry-run: would stop derod, remove the service unit, and delete $DATA_DIR_REAL, $BIN_DIR, $LOG_DIR_REAL, $SNAPSHOT_DIR_REAL, $CONFIG_FILE${C_RESET}"
+        return 0
+    fi
+    echo "${C_WARN}[!] This removes the derod binary, chain data, logs, snapshots, and config.json.${C_RESET}" >&2
+    if ! $SNAPSHOT_YES && [ "$(yesno "Continue?" n)" != "y" ]; then
+        echo "${C_ERR}[x] Aborted.${C_RESET}" >&2
+        return 1
+    fi
+    # Safety guard: never wipe / or an empty path even if config.json was
+    # pointed at something pathological.
+    local dir
+    for dir in "$DATA_DIR_REAL" "$BIN_DIR" "$LOG_DIR_REAL" "$SNAPSHOT_DIR_REAL"; do
+        if [ -z "$dir" ] || [ "$dir" = "/" ]; then
+            echo "${C_ERR}[x] Refusing to uninstall: $dir is not a removable path.${C_RESET}" >&2
+            return 1
+        fi
+    done
+    echo "${C_INFO}[*] stopping derod...${C_RESET}" >&2
+    service_remove
+    echo "${C_INFO}[*] removing node data...${C_RESET}" >&2
+    rm -rf "$DATA_DIR_REAL" "$BIN_DIR" "$LOG_DIR_REAL" "$SNAPSHOT_DIR_REAL"
+    rm -f "$CONFIG_FILE" "$CONFIG_FILE.bak" "$INSTALL_DIR/derod.pid" "$INSTALL_DIR/run-derod.sh" "$INSTALL_DIR/run-derod.ps1"
+    echo "${C_OK}[*] derod removed — deronode stays installed. Re-run the menu to configure a fresh node.${C_RESET}"
+}
+
 cmd_snapshot() {
     resolve_paths
     SNAPSHOT_DIR="${SNAPSHOT_OUT:-$SNAPSHOT_DIR_REAL}"
@@ -829,6 +871,7 @@ case "$ACTION" in
     restore)     cmd_restore ;;
     resync)      cmd_resync ;;
     logs)        cmd_logs ;;
+    uninstall)   cmd_uninstall ;;
     *)           # Menu-driven: dispatch the chosen action, then come back to
                  # the menu instead of exiting (q in the menu quits). Nonzero
                  # action exits are swallowed so a failure shows the menu again
@@ -846,6 +889,7 @@ case "$ACTION" in
                          restore)     cmd_restore     || true ;;
                          resync)      cmd_resync      || true ;;
                          logs)        cmd_logs        || true ;;
+                         uninstall)   cmd_uninstall   || true ;;
                          reconfigure) cmd_reconfigure || true ;;
                      esac
                  done ;;

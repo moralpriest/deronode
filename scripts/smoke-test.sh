@@ -858,6 +858,33 @@ if echo "$logs_src" | grep -q 'tail -n 100 -f' && echo "$logs_src" | grep -q 'de
 else
     fail "cmd_logs tails derod.log and falls back to out/err captures"
 fi
+# uninstall command: parse, menu, dispatch, stop+wipe, keep deronode
+if grep -q 'uninstall) ACTION="uninstall"' node.sh && grep -q '13) ACTION=uninstall' node.sh && grep -qE 'uninstall\) +cmd_uninstall ;;' node.sh; then
+    pass "uninstall wired into parse/menu/dispatch"
+else
+    fail "uninstall wired into parse/menu/dispatch"
+fi
+uninst_src="$(sed -n '/^cmd_uninstall()/,/^}/p' node.sh)"
+if echo "$uninst_src" | grep -q 'service_remove' && echo "$uninst_src" | grep -q 'rm -rf' && echo "$uninst_src" | grep -q 'DATA_DIR_REAL' && echo "$uninst_src" | grep -q 'CONFIG_FILE'; then
+    pass "cmd_uninstall removes service + binary/chain/logs/snapshots/config"
+else
+    fail "cmd_uninstall removes service + binary/chain/logs/snapshots/config"
+fi
+if echo "$uninst_src" | grep -q 'external_installed' && echo "$uninst_src" | grep -q 'yesno'; then
+    pass "cmd_uninstall refuses external + confirms before wiping"
+else
+    fail "cmd_uninstall refuses external + confirms before wiping"
+fi
+if echo "$uninst_src" | grep -q 'Refusing to uninstall' && echo "$uninst_src" | grep -q 'is not a removable path'; then
+    pass "cmd_uninstall guards against wiping / or empty paths"
+else
+    fail "cmd_uninstall guards against wiping / or empty paths"
+fi
+if echo "$uninst_src" | grep -q 'stays installed' && echo "$uninst_src" | grep -q 'DRY_RUN'; then
+    pass "cmd_uninstall keeps deronode itself + supports dry-run"
+else
+    fail "cmd_uninstall keeps deronode itself + supports dry-run"
+fi
 
 # 15. Snapshot prompts — confirm-new-snapshot + prompt-to-stop (stub-extracted
 # from node.sh). yesno answers dispatch on the prompt text: the confirm-new
