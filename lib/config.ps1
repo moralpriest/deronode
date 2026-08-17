@@ -35,9 +35,10 @@ function Resolve-Paths {
     $script:LogDirReal  = if ($script:CFG.log_dir)  { $script:CFG.log_dir }  else { Join-Path $InstallDir 'logs' }
     if ($script:CFG.snapshot_dir) {
         $script:SnapshotDirReal = $script:CFG.snapshot_dir
-    } elseif ($HOME) {
-        $script:SnapshotDirReal = Join-Path $HOME 'Crypto/dero/snapshots'
     } else {
+        # Same tree as the derod binary/install (bin/derod/derod sits under
+        # InstallDir) — snapshots live next to the node, not in the old
+        # ~/Crypto/dero external-node path.
         $script:SnapshotDirReal = Join-Path $InstallDir 'snapshots'
     }
 }
@@ -76,14 +77,67 @@ function Export-Config {
     $script:CFG | ConvertTo-Json -Depth 4 | Set-Content $ConfigFile -Encoding UTF8
 }
 
+# Lowest block height still present in bltx_store, or $null. derod names block
+# files <hash>.block_<difficulty>_<snapshot_version>_<height> (see storefs.go).
+# A completed --prune-history deletes everything below the prune point, leaving
+# only the genesis block (height 0) plus a rolling window of recent blocks near
+# the tip — so the lowest remaining height above genesis is the prune floor.
+# Height 0 must be excluded: genesis is always kept, so including it would make
+# every pruned chain look unpruned.
+function Get-ChainMinBlockHeight {
+    $bltx = Join-Path $script:DataDirReal 'mainnet/bltx_store'
+    if (-not (Test-Path $bltx)) { return $null }
+    $min = $null
+    Get-ChildItem -Path $bltx -Recurse -File -Filter '*.block_*' -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -match '\.block_\d+_\d+_(\d+)$') {
+            $h = [int64]$Matches[1]
+            # Genesis (height 0) is always kept after a prune — exclude it, or
+            # every pruned chain would look unpruned.
+            if ($h -ne 0 -and ($null -eq $min -or $h -lt $min)) { $min = $h }
+        }
+    }
+    return $min
+}
+
 function Build-DerodArgv {
     $argv = New-Object System.Collections.Generic.List[string]
     if ($script:CFG.testnet) { $argv.Add('--testnet') }
     if ($script:CFG.debug) { $argv.Add('--debug') }
     if ($script:CFG.time_is_in_sync) { $argv.Add('--timeisinsync') }
     if ($script:CFG.sync_node) { $argv.Add('--sync-node') }
-    if ($script:CFG.fastsync) { $argv.Add('--fastsync') }
-    if ($script:CFG.prune_history) { $argv.Add("--prune-history=$($script:CFG.prune_history)") }
+    # fastsync is a bootstrap-only flag — derod only honors it while the chain
+    # is fresh, and re-running it on a synced chain redoes the fastsync
+    # bootstrap. Once the chain has blocks (topo.map exists) drop it; use
+    # 'deronode resync' to force a fresh bootstrap.
+    if ($script:CFG.fastsync) {
+        $topoMap = Join-Path $script:DataDirReal 'mainnet/topo.map'
+        if (Test-Path $topoMap) {
+            Write-Host "[!] chain already bootstrapped at $($script:DataDirReal) - skipping --fastsync (use 'deronode resync' to re-bootstrap)" -ForegroundColor Yellow
+        } else {
+            $argv.Add('--fastsync')
+        }
+    }
+    # derod refuses --prune-history on a chain with <50 blocks and exits
+    # ("We need atleast 50 blocks to prune"). Defer it until the fastsync
+    # bootstrap has produced blocks (topo.map exists in the chain dir).
+    if ($script:CFG.prune_history) {
+        $topoMap = Join-Path $script:DataDirReal 'mainnet/topo.map'
+        if (Test-Path $topoMap) {
+            $minH = Get-ChainMinBlockHeight
+            # Prune is a one-shot rewrite: once the oldest retained (non-genesis)
+            # block is already at/above the prune point, re-passing
+            # --prune-history would make derod redo the whole multi-hour rewrite
+            # on every start for nothing. Allow a 1000-block margin for the
+            # rolling window derod keeps near the tip.
+            if ($null -ne $minH -and $minH -ge ($script:CFG.prune_history - 1000)) {
+                Write-Host "[!] chain at $($script:DataDirReal) already pruned to topo ~$minH - skipping --prune-history (raise --prune-history to re-prune)" -ForegroundColor Yellow
+            } else {
+                $argv.Add("--prune-history=$($script:CFG.prune_history)")
+            }
+        } else {
+            Write-Host "[!] fresh chain at $($script:DataDirReal) - deferring --prune-history until the chain has blocks" -ForegroundColor Yellow
+        }
+    }
     if ($script:CFG.socks_proxy) { $argv.Add("--socks-proxy=$($script:CFG.socks_proxy)") }
     if ($script:DataDirReal) { $argv.Add("--data-dir=$($script:DataDirReal)") }
     if ($script:CFG.p2p_bind) { $argv.Add("--p2p-bind=$($script:CFG.p2p_bind)") }

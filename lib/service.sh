@@ -68,8 +68,8 @@ EOF
     <array><string>$INSTALL_DIR/run-derod.sh</string></array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>$LOG_DIR_REAL/derod.log</string>
-    <key>StandardErrorPath</key><string>$LOG_DIR_REAL/derod.log</string>
+    <key>StandardOutPath</key><string>$LOG_DIR_REAL/derod.out.log</string>
+    <key>StandardErrorPath</key><string>$LOG_DIR_REAL/derod.err.log</string>
 </dict>
 </plist>
 EOF

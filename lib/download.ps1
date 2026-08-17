@@ -18,11 +18,18 @@ function Resolve-Release {
     $script:LastAsset = $asset[0].archive
     # Resolve the latest tag from the releases/latest redirect (CDN — no GitHub
     # API quota, immune to unauthenticated rate limits). Retry on network blips.
+    # -SkipHttpErrorCheck is PS 7+; on 5.1 we catch the terminating error and
+    # inspect the response status instead.
     $script:LastTag = ''
     for ($i = 1; $i -le 3; $i++) {
         try {
-            $resp = Invoke-WebRequest -Uri "https://github.com/$($script:Repo)/releases/latest" -Method Head -MaximumRedirection 1 -SkipHttpErrorCheck -TimeoutSec 20
-            $final = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+            if ($PSVersionTable.PSVersion.Major -ge 7) {
+                $resp = Invoke-WebRequest -Uri "https://github.com/$($script:Repo)/releases/latest" -Method Head -MaximumRedirection 1 -SkipHttpErrorCheck -TimeoutSec 20
+                $final = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+            } else {
+                $resp = Invoke-WebRequest -Uri "https://github.com/$($script:Repo)/releases/latest" -Method Head -MaximumRedirection 1 -TimeoutSec 20 -ErrorAction SilentlyContinue
+                $final = $resp.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+            }
             if ($final) { $script:LastTag = ([uri]$final).Segments[-1].TrimEnd('/') }
             if ($script:LastTag) { break }
         } catch {
@@ -37,10 +44,16 @@ function Resolve-Release {
     return $true
 }
 
+# bin/derod/.tag holds the tag the cached binary came from. Fresh when it
+# matches a resolved tag, or within the freshness window. A community-dev
+# source build (Test-SourceBuild) is always treated as fresh — `start` must
+# never silently replace it with a release download; only an explicit
+# `update` swaps back to the release.
 function Test-CacheFresh {
     $derod = Join-Path $BinDir 'derod/derod'
     $tagfile = Join-Path $BinDir 'derod/.tag'
     if (-not (Test-Path $derod) -or -not (Test-Path $tagfile)) { return $false }
+    if (Test-SourceBuild) { return $true }
     if ((Get-Content $tagfile -Raw).Trim() -eq $script:LastTag) { return $true }
     $tf = Join-Path $BinDir 'derod/.tagtime'
     if (Test-Path $tf) {
@@ -79,18 +92,41 @@ function Invoke-FetchDerod {
     param([object]$Platform)
     $derodDir = Join-Path $BinDir 'derod'
     New-Item -ItemType Directory -Path $derodDir -Force | Out-Null
+    # Archives are kept in bin/archives/<tag>/ so an already-downloaded release
+    # is not fetched again (re-verified against checksum.txt; a corrupt cache is
+    # discarded and refetched).
+    $cacheAr = Join-Path (Join-Path $BinDir 'archives') (Join-Path $script:LastTag $script:LastAsset)
+    New-Item -ItemType Directory -Path (Split-Path $cacheAr) -Force | Out-Null
     $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('deronode-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $tmp -Force | Out-Null
     try {
         $url = "$($script:GH_DL)/$($script:LastTag)/$($script:LastAsset)"
-        Write-Host "[*] Downloading $($script:LastAsset) (tag $($script:LastTag))" -ForegroundColor DarkCyan
-        Invoke-WebRequest -Uri $url -OutFile (Join-Path $tmp $script:LastAsset) -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+        $ar = Join-Path $tmp $script:LastAsset
+        $reused = $false
+        if (Test-Path $cacheAr) {
+            Write-Host "[*] Reusing cached $($script:LastAsset) (tag $($script:LastTag))" -ForegroundColor DarkCyan
+            Copy-Item $cacheAr $ar -Force
+            $reused = $true
+        } else {
+            Write-Host "[*] Downloading $($script:LastAsset) (tag $($script:LastTag))" -ForegroundColor DarkCyan
+            Invoke-WebRequest -Uri $url -OutFile $ar -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+        }
 
         $cs = Join-Path $tmp 'checksum.txt'
         try {
             Invoke-WebRequest -Uri "$($script:GH_DL)/$($script:LastTag)/checksum.txt" -OutFile $cs -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop
-            if (Test-Checksum (Join-Path $tmp $script:LastAsset) $cs $script:LastAsset) {
+            if (Test-Checksum $ar $cs $script:LastAsset) {
                 Write-Host "[*] checksum verified against checksum.txt" -ForegroundColor Green
+            } elseif ($reused) {
+                # Cached archive failed verification - discard and refetch it.
+                Write-Host "[!] cached archive failed checksum - re-downloading" -ForegroundColor Yellow
+                Remove-Item $cacheAr -Force -ErrorAction SilentlyContinue
+                Invoke-WebRequest -Uri $url -OutFile $ar -UseBasicParsing -TimeoutSec 300 -ErrorAction Stop
+                if (Test-Checksum $ar $cs $script:LastAsset) {
+                    Write-Host "[*] checksum verified against checksum.txt" -ForegroundColor Green
+                } else {
+                    Write-Host "[!] checksum mismatch or not listed - continuing" -ForegroundColor Yellow
+                }
             } else {
                 Write-Host "[!] checksum mismatch or not listed - continuing" -ForegroundColor Yellow
             }
@@ -102,9 +138,9 @@ function Invoke-FetchDerod {
         $x = Join-Path $tmp 'x'
         New-Item -ItemType Directory -Path $x -Force | Out-Null
         if ($script:LastAsset -like '*.zip') {
-            Expand-Archive (Join-Path $tmp $script:LastAsset) -DestinationPath $x -Force
+            Expand-Archive $ar -DestinationPath $x -Force
         } else {
-            & tar -xzf (Join-Path $tmp $script:LastAsset) -C $x 2>$null
+            & tar -xzf $ar -C $x 2>$null
             if ($LASTEXITCODE -ne 0) { throw 'tar extraction failed' }
         }
 
@@ -116,6 +152,8 @@ function Invoke-FetchDerod {
         Set-Content (Join-Path $derodDir '.tag') $script:LastTag -NoNewline
         Set-Content (Join-Path $derodDir '.tagtime') ([int][double]::Parse((Get-Date -UFormat %s))) -NoNewline
         Set-Content (Join-Path $derodDir '.asset') $script:LastAsset -NoNewline
+        # Keep the verified archive so the next install of this tag skips the download.
+        Copy-Item $ar $cacheAr -Force
         Write-Host "[*] derod $($script:LastTag) ready: $(Join-Path $derodDir 'derod')" -ForegroundColor Green
     } catch {
         Write-Host "[x] $($_.Exception.Message)" -ForegroundColor Red

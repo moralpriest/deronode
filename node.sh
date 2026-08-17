@@ -19,6 +19,8 @@ source "$LIB_DIR/ui.sh"
 source "$LIB_DIR/config.sh"
 # shellcheck source=lib/download.sh
 source "$LIB_DIR/download.sh"
+# shellcheck source=lib/build.sh
+source "$LIB_DIR/build.sh"
 # shellcheck source=lib/rpc.sh
 source "$LIB_DIR/rpc.sh"
 # shellcheck source=lib/service.sh
@@ -33,11 +35,13 @@ ACTION="menu"
 AS_SERVICE=false
 DRY_RUN=false
 RECONFIGURE=false
+MENU_MODE=false   # true while driving the interactive menu (loop back after each action)
 SNAPSHOT_OUT=""
 SNAPSHOT_FROM=""
 SNAPSHOT_MAX_RATIO=false
 SNAPSHOT_KEEP_RUNNING=false
 SNAPSHOT_YES=false
+UPDATE_SOURCE="release"   # update source: release (download) | dev (community-dev compile)
 
 # ── Help ──
 show_help() {
@@ -51,14 +55,19 @@ Usage: deronode [command] [options]
     start                Run derod (--service to install/start a background service)
     stop                 Stop derod
     status               Show sync status, binary tag, paths
-    update               Fetch the latest DEROFDN release; restart if running
+    update               Update derod; restart if running. --source=release (default,
+                         download) or --source=dev (compile latest community-dev)
+    build                Compile the latest community-dev source branch (Go required)
     snapshot             Create a privacy-hardened tar.zst of the chain state
     restore              Restore chain state from a snapshot (stops the node)
+    resync               Wipe the chain and re-bootstrap via --fastsync
+    logs                 Tail the node log (derod.log; follows live)
     --reconfigure        Re-run the first-run prompts (incl. data-dir / log-dir)
 
   Options:
     --dry-run            Resolve/download nothing; print the derod argv and exit
     --config=<path>      Config file (default ./config.json)
+    --source=release|dev Update source (release download or community-dev compile)
     --integrator-address=<addr>  10% rewards address
     --sync-profile=<p>   pruned | full | none (shortcut for fastsync/prune)
     --fastsync           Enable fast sync (bootstrap only)
@@ -87,7 +96,7 @@ Usage: deronode [command] [options]
     --out=<dir>          Snapshot output dir (overrides snapshot_dir)
     --keep-running       Allow snapshot while derod runs on this data dir
     --from=<archive>     Archive to restore (restore)
-    --yes                Skip snapshot/restore confirmations
+    --yes                Skip snapshot/restore/resync confirmations
     --version | -h       Version / help
 
   Examples:
@@ -105,7 +114,7 @@ parse_cli_args() {
     local key
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --integrator-address|--sync-profile|--prune-history|--node-tag|--getwork-bind|--data-dir|--log-dir|--rpc-bind|--p2p-bind|--min-peers|--max-peers|--socks-proxy|--add-priority-node|--add-exclusive-node|--clog-level|--flog-level|--config|--extra-arg|--level|--out|--from)
+            --integrator-address|--sync-profile|--prune-history|--node-tag|--getwork-bind|--data-dir|--log-dir|--rpc-bind|--p2p-bind|--min-peers|--max-peers|--socks-proxy|--add-priority-node|--add-exclusive-node|--clog-level|--flog-level|--config|--extra-arg|--level|--out|--from|--source)
                 if [ $# -lt 2 ]; then echo "${C_ERR}[x] Missing value for $1${C_RESET}" >&2; exit 1; fi
                 norm+=("$1=$2"); shift 2 ;;
             *) norm+=("$1"); shift ;;
@@ -143,6 +152,7 @@ parse_cli_args() {
             --keep-running) SNAPSHOT_KEEP_RUNNING=true; shift ;;
             --from=*) SNAPSHOT_FROM="${1#*=}"; shift ;;
             --yes) SNAPSHOT_YES=true; shift ;;
+            --source=*) UPDATE_SOURCE="${1#*=}"; shift ;;
             --config=*) CONFIG_FILE="${1#*=}"; shift ;;
             --dry-run) DRY_RUN=true; [ "$ACTION" = "menu" ] && ACTION="start"; shift ;;
             --service) AS_SERVICE=true; shift ;;
@@ -153,8 +163,11 @@ parse_cli_args() {
             stop) ACTION="stop"; shift ;;
             status) ACTION="status"; shift ;;
             update) ACTION="update"; shift ;;
+            build) ACTION="build"; shift ;;
             snapshot) ACTION="snapshot"; shift ;;
             restore) ACTION="restore"; shift ;;
+            resync) ACTION="resync"; shift ;;
+            logs) ACTION="logs"; shift ;;
             *) echo "${C_ERR}[x] Unknown: $1${C_RESET}" >&2; show_help >&2; exit 1 ;;
         esac
     done
@@ -239,6 +252,16 @@ configure() {
         fi
     fi
 
+    echo ""
+    echo "  Run mode:"
+    echo "    ${C_BOLD}1) Background system service${C_RESET}   auto-start on boot (systemd / LaunchAgent / background)"
+    echo "    ${C_BOLD}2) Foreground${C_RESET}               run in this terminal"
+    ask pick "Choose" "2"
+    case "$pick" in
+        1) AS_SERVICE=true ;;
+        *) AS_SERVICE=false ;;
+    esac
+
     apply_testnet_defaults
     validate_config
     save_config
@@ -259,7 +282,13 @@ menu() {
         case "$a" in
             1|"") 
                 [ -f "$CONFIG_FILE" ] || configure
-                ensure_binary
+                # Continue straight into `start` after installing — no second
+                # menu prompt.
+                if ensure_binary; then
+                    ACTION=start
+                    return
+                fi
+                exit 1
                 ;;
             *) exit 0 ;;
         esac
@@ -272,11 +301,14 @@ menu() {
         echo "  ${C_BOLD}2)${C_RESET} Start as background service"
         echo "  ${C_BOLD}3)${C_RESET} Stop"
         echo "  ${C_BOLD}4)${C_RESET} Status"
-        echo "  ${C_BOLD}5)${C_RESET} Update derod"
-        echo "  ${C_BOLD}6)${C_RESET} Reconfigure"
-        echo "  ${C_BOLD}7)${C_RESET} Show command line (dry-run)"
-        echo "  ${C_BOLD}8)${C_RESET} Snapshot chain state (tar.zst)"
-        echo "  ${C_BOLD}9)${C_RESET} Restore chain state from snapshot"
+        echo "  ${C_BOLD}5)${C_RESET} Update derod (release or community-dev)"
+        echo "  ${C_BOLD}6)${C_RESET} Build derod from community-dev source"
+        echo "  ${C_BOLD}7)${C_RESET} Reconfigure"
+        echo "  ${C_BOLD}8)${C_RESET} Show command line (dry-run)"
+        echo "  ${C_BOLD}9)${C_RESET} Snapshot chain state (tar.zst)"
+        echo "  ${C_BOLD}10)${C_RESET} Restore chain state from snapshot"
+        echo "  ${C_BOLD}11)${C_RESET} Resync: wipe chain + re-bootstrap (fastsync)"
+        echo "  ${C_BOLD}12)${C_RESET} View node logs (tail -f)"
         echo "  ${C_BOLD}q)${C_RESET} Quit"
         local a
         ask a "Choose" ""
@@ -285,11 +317,22 @@ menu() {
             2) ACTION=start; AS_SERVICE=true; return ;;
             3) ACTION=stop; return ;;
             4) ACTION=status; return ;;
-            5) ACTION=update; return ;;
-            6) ACTION=reconfigure; return ;;
-            7) ACTION=start; DRY_RUN=true; return ;;
-            8) ACTION=snapshot; return ;;
-            9) ACTION=restore; return ;;
+            5) echo "    Update source:"
+               echo "      1) Latest release (download)"
+               echo "      2) community-dev source (compile)"
+               ask pick "Choose" "1"
+               case "$pick" in
+                   2) UPDATE_SOURCE=dev ;;
+                   *) UPDATE_SOURCE=release ;;
+               esac
+               ACTION=update; return ;;
+            6) ACTION=build; return ;;
+            7) ACTION=reconfigure; return ;;
+            8) ACTION=start; DRY_RUN=true; return ;;
+            9) ACTION=snapshot; return ;;
+            10) ACTION=restore; return ;;
+            11) ACTION=resync; return ;;
+            12) ACTION=logs; return ;;
             q|Q) exit 0 ;;
             *) echo "${C_ERR}[x] Unknown choice${C_RESET}" >&2 ;;
         esac
@@ -309,6 +352,9 @@ cmd_start() {
         build_derod_argv
         echo "${C_MUTE}derod command line:${C_RESET}"
         print_argv
+        # Menu option 7: show the argv and fall back to the menu; a plain CLI
+        # --dry-run exits after printing (scripted callers need the exit code).
+        $MENU_MODE && return 0
         exit 0
     fi
     if external_installed; then
@@ -323,7 +369,13 @@ cmd_start() {
     if $AS_SERVICE; then
         service_install
     else
-        exec "$BINARY_PATH" "${DEROD_ARGV[@]}"
+        # From the menu, run derod as a child so the menu is shown again once
+        # the node exits. Plain CLI start keeps exec (exit code propagation).
+        if $MENU_MODE; then
+            "$BINARY_PATH" "${DEROD_ARGV[@]}" || true
+        else
+            exec "$BINARY_PATH" "${DEROD_ARGV[@]}"
+        fi
     fi
 }
 
@@ -335,11 +387,48 @@ cmd_stop() {
     service_stop
 }
 
-# external_start — start a system-installed (external) derod via its systemd
-# unit (sudo when system-level). No-op when already running. Never downloads or
-# spawns a managed derod.
+# cmd_logs — tail the node's log file live. derod writes its own structured
+# log (--log-dir) as derod.log; launchd / background backends also capture
+# stdout/stderr to derod.out.log + derod.err.log, which we fall back to.
+cmd_logs() {
+    resolve_paths
+    local log="$LOG_DIR_REAL/derod.log"
+    if [ -f "$log" ]; then
+        echo "${C_INFO}[*] tailing $log (Ctrl-C to stop)${C_RESET}" >&2
+        if $MENU_MODE; then
+            tail -n 100 -f "$log"
+            return 0
+        fi
+        exec tail -n 100 -f "$log"
+    fi
+    # No derod.log yet — service stdout/stderr captures (launchd / background).
+    local -a files=()
+    [ -f "$LOG_DIR_REAL/derod.out.log" ] && files+=("$LOG_DIR_REAL/derod.out.log")
+    [ -f "$LOG_DIR_REAL/derod.err.log" ] && files+=("$LOG_DIR_REAL/derod.err.log")
+    if [ "${#files[@]}" -gt 0 ]; then
+        echo "${C_INFO}[*] tailing ${files[*]} (Ctrl-C to stop)${C_RESET}" >&2
+        if $MENU_MODE; then
+            tail -n 100 -f "${files[@]}"
+            return 0
+        fi
+        exec tail -n 100 -f "${files[@]}"
+    fi
+    echo "${C_WARN}[!] no log files in $LOG_DIR_REAL — derod hasn't written logs yet (foreground start prints to the terminal).${C_RESET}" >&2
+    if external_installed; then
+        local unit
+        unit="$(external_unit)" || unit="derod.service"
+        echo "    externally-managed node — its logs live with its service manager (e.g. journalctl --user -u $unit -f)" >&2
+    elif [ "$(service_backend)" = "systemd" ]; then
+        echo "    systemd console stream: journalctl --user -u deronode.service -f" >&2
+    fi
+    return 1
+}
+
+# external_start — start a system-installed (external) derod via its service
+# manager (sudo when system-level). No-op when already running. Never downloads
+# or spawns a managed derod.
 external_start() {
-    local unit
+    local unit plist
     if node_running; then
         unit="$(external_unit || echo derod.service)"
         echo "${C_INFO}[*] external derod already running ($unit)${C_RESET}" >&2
@@ -347,6 +436,30 @@ external_start() {
     fi
     unit="$(external_unit)" || { echo "${C_ERR}[x] No external derod unit found${C_RESET}" >&2; return 1; }
     echo "${C_INFO}[*] starting $unit...${C_RESET}" >&2
+    if [ "$OS" = "darwin" ]; then
+        # launchd: start a loaded user agent; load (sudo for daemons) otherwise.
+        if launchctl list 2>/dev/null | awk -v u="$unit" '$3 == u {found=1} END {exit !found}'; then
+            launchctl kickstart "gui/$(id -u)/$unit" 2>/dev/null \
+                || launchctl start "$unit" 2>/dev/null
+            echo "${C_OK}[*] $unit started${C_RESET}" >&2
+            return 0
+        fi
+        for plist in "$HOME/Library/LaunchAgents/$unit.plist" "/Library/LaunchAgents/$unit.plist" "/Library/LaunchDaemons/$unit.plist"; do
+            [ -f "$plist" ] || continue
+            if launchctl load "$plist" 2>/dev/null || sudo -n launchctl load "$plist" 2>/dev/null; then
+                echo "${C_OK}[*] $unit loaded + started${C_RESET}" >&2
+                return 0
+            fi
+            if [ -t 0 ] && sudo launchctl load "$plist"; then
+                echo "${C_OK}[*] $unit loaded + started${C_RESET}" >&2
+                return 0
+            fi
+            echo "${C_WARN}[!] could not start $unit — run: sudo launchctl load $plist${C_RESET}" >&2
+            return 1
+        done
+        echo "${C_WARN}[!] no plist found for $unit${C_RESET}" >&2
+        return 1
+    fi
     if external_is_system_unit; then
         if sudo -n systemctl start "$unit" 2>/dev/null; then
             echo "${C_OK}[*] $unit started${C_RESET}" >&2
@@ -368,13 +481,34 @@ external_start() {
 }
 
 # external_stop — stop a system-installed (external) derod: resolve its unit
-# and stop via systemd (sudo when system-level), else kill the bare process
-# directly. Works whether the node is running or already stopped.
+# and stop via the service manager (sudo when system-level), else kill the bare
+# process directly. Works whether the node is running or already stopped.
 external_stop() {
-    local unit pid
+    local unit pid plist
     unit="$(external_unit)"
     if [ -n "$unit" ]; then
         echo "${C_INFO}[*] stopping $unit...${C_RESET}" >&2
+        if [ "$OS" = "darwin" ]; then
+            if launchctl list 2>/dev/null | awk -v u="$unit" '$3 == u {found=1} END {exit !found}'; then
+                launchctl kickstart -k "gui/$(id -u)/$unit" 2>/dev/null || true
+                launchctl stop "$unit" 2>/dev/null || true
+            fi
+            for plist in "$HOME/Library/LaunchAgents/$unit.plist" "/Library/LaunchAgents/$unit.plist" "/Library/LaunchDaemons/$unit.plist"; do
+                [ -f "$plist" ] || continue
+                if launchctl unload "$plist" 2>/dev/null || sudo -n launchctl unload "$plist" 2>/dev/null; then
+                    echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
+                    return 0
+                fi
+                if [ -t 0 ] && sudo launchctl unload "$plist"; then
+                    echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
+                    return 0
+                fi
+                echo "${C_WARN}[!] could not stop $unit — run: sudo launchctl unload $plist${C_RESET}" >&2
+                return 1
+            done
+            echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
+            return 0
+        fi
         if external_is_system_unit; then
             if sudo -n systemctl stop "$unit" 2>/dev/null; then
                 echo "${C_OK}[*] $unit stopped${C_RESET}" >&2
@@ -394,8 +528,8 @@ external_stop() {
         echo "${C_WARN}[!] could not stop $unit — run: systemctl --user stop $unit${C_RESET}" >&2
         return 1
     fi
-    # No systemd unit — plain externally-launched process: kill it directly.
-    pid="$(pgrep -f 'derod-linux-amd64 --fastsync' | head -1)"
+    # No unit — plain externally-launched process: kill it directly.
+    pid="$(derod_pid)"
     [ -n "$pid" ] || { echo "${C_INFO}[*] no external derod running${C_RESET}" >&2; return 0; }
     kill "$pid" 2>/dev/null
     sleep 1
@@ -421,17 +555,26 @@ cmd_status() {
 }
 
 cmd_update() {
+    # --source=dev routes the update through the community-dev compile path.
+    if [ "${UPDATE_SOURCE:-release}" = "dev" ]; then
+        cmd_build
+        return $?
+    fi
     resolve_release || exit 1
     local old new was_running=false
     old="$(cat "$BIN_DIR/derod/.tag" 2>/dev/null || echo none)"
-    if cached_tag_fresh; then
+    # An explicit `update` always fetches the latest release — including over a
+    # community-dev source build, which is otherwise kept as fresh. Skip both
+    # "already at latest" short-circuits when the installed binary is a source
+    # build so the user can switch back to the release.
+    if ! is_source_build && cached_tag_fresh; then
         echo "${C_OK}[*] Already at latest ($LAST_TAG).${C_RESET}"
         return 0
     fi
     # If the running daemon already reports the latest release, skip download and
     # install entirely. This covers externally-managed nodes whose bin/ cache tag
     # may be stale or absent even though the running binary is current.
-    if [ -n "$LAST_TAG" ]; then
+    if ! is_source_build && [ -n "$LAST_TAG" ]; then
         local run_rel latest_rel
         run_rel="$(daemon_release_number)"
         latest_rel="$(printf '%s' "$LAST_TAG" | grep -oE '[0-9]+$' | head -1)"
@@ -454,14 +597,15 @@ cmd_update() {
     fi
 }
 
-# Update path for an externally-managed node (systemd etc.): download the new
-# derod into bin/, back up + replace the running binary, then restart its unit.
+# Update path for an externally-managed node (systemd unit / launchd agent):
+# download the new derod into bin/, back up + replace the running binary, then
+# restart its unit/agent. Process/binary resolution and the restart are
+# platform-agnostic (Linux /proc + systemd, macOS lsof + launchctl).
 cmd_update_external() {
     local pid bin unit ts
-    pid="$(pgrep -f 'derod-linux-amd64 --fastsync' | head -1)"
+    pid="$(derod_pid)"
     [ -n "$pid" ] || { echo "${C_ERR}[x] Could not find the running derod process${C_RESET}" >&2; return 1; }
-    bin="$(readlink "/proc/$pid/exe" 2>/dev/null)"
-    bin="${bin% (deleted)}"
+    bin="$(process_exe "$pid")"
     [ -n "$bin" ] && [ -f "$bin" ] || { echo "${C_ERR}[x] Could not resolve the running derod binary path${C_RESET}" >&2; return 1; }
 
     fetch_derod || return 1
@@ -472,6 +616,22 @@ cmd_update_external() {
     cp -f "$BINARY_PATH" "$bin" || { echo "${C_ERR}[x] Replace failed: $bin${C_RESET}" >&2; return 1; }
     chmod +x "$bin"
     echo "${C_OK}[*] replaced $bin with $LAST_TAG${C_RESET}" >&2
+
+    if [ "$OS" = "darwin" ]; then
+        # launchd: kickstart -k restarts a loaded agent; otherwise tell the user.
+        unit="$(external_unit)"
+        if [ -n "$unit" ]; then
+            echo "${C_INFO}[*] restarting $unit...${C_RESET}" >&2
+            if launchctl kickstart -k "gui/$(id -u)/$unit" 2>/dev/null; then
+                echo "${C_OK}[*] $unit restarted with $LAST_TAG${C_RESET}" >&2
+            else
+                echo "${C_WARN}[!] restart $unit manually: launchctl kickstart -k gui/$(id -u)/$unit${C_RESET}" >&2
+            fi
+        else
+            echo "${C_WARN}[!] external node has no launchd agent — restart it manually${C_RESET}" >&2
+        fi
+        return 0
+    fi
 
     unit="$(awk -F/ '/\.service$/ {print $NF}' "/proc/$pid/cgroup" 2>/dev/null | head -1)"
     if [ -n "$unit" ]; then
@@ -486,9 +646,85 @@ cmd_update_external() {
     fi
 }
 
+# cmd_build — compile the latest DEROFDN/derohe community-dev source branch
+# with the local Go toolchain and install it as bin/derod/derod (an
+# alternative to downloading a release). Restarts a running node like update.
+# Refuses on externally-managed nodes (we never replace binaries we don't own).
+cmd_build() {
+    if $DRY_RUN; then
+        echo "${C_INFO}[*] dry-run: would clone $DEV_REPO ($DEV_BRANCH) and 'go build ./cmd/derod' into $BINARY_PATH${C_RESET}"
+        return 0
+    fi
+    if external_installed; then
+        echo "${C_ERR}[x] build only works on a deronode-managed node (an external derod is installed).${C_RESET}" >&2
+        return 1
+    fi
+    if ! have_go; then
+        echo "${C_ERR}[x] Go toolchain not found — install Go 1.17+ (https://go.dev/dl/) to build derod from source.${C_RESET}" >&2
+        return 1
+    fi
+    local old was_running=false
+    old="$(cat "$BIN_DIR/derod/.tag" 2>/dev/null || echo none)"
+    echo "${C_INFO}[*] Building derod $old -> $DEV_BRANCH${C_RESET}"
+    node_running && was_running=true
+    if $was_running; then service_stop; fi
+    build_derod_from_source || exit 1
+    if $was_running; then
+        echo "${C_INFO}[*] restarting with the freshly-built binary...${C_RESET}"
+        service_install
+    fi
+}
+
 cmd_reconfigure() {
     configure
-    echo "${C_OK}[*] Done. Run 'deronode start' to launch.${C_RESET}"
+    # Continue straight into `start` after asking questions, same as the
+    # first-run install flow. Only when nothing is running — a live node
+    # must be stopped/restarted by the user instead.
+    if node_running; then
+        echo "${C_WARN}[!] derod is running — stop it first (deronode stop) to apply the new config.${C_RESET}" >&2
+        return 0
+    fi
+    cmd_start
+}
+
+# cmd_resync — wipe the chain data and re-bootstrap via --fastsync. This is the
+# "start over" path: a fresh chain (or one broken by a bad prune) gets a clean
+# fastsync bootstrap. Refuses on externally-managed nodes (we never touch data
+# we don't own). Stops a running node first, deletes the chain dir, forces
+# fastsync on and prune off (a fresh chain can't prune), then starts.
+cmd_resync() {
+    resolve_paths
+    if external_installed; then
+        echo "${C_ERR}[x] resync only works on a deronode-managed node (an external derod is installed).${C_RESET}" >&2
+        return 1
+    fi
+    if $DRY_RUN; then
+        echo "${C_INFO}[*] dry-run: would wipe $(snapshot_chain_dir) and re-bootstrap via --fastsync${C_RESET}"
+        return 0
+    fi
+    local chain_dir size
+    chain_dir="$(snapshot_chain_dir)"
+    if [ -d "$chain_dir" ]; then
+        size="$(du -sh "$chain_dir" 2>/dev/null | awk '{print $1}')"
+        echo "${C_WARN}[!] This deletes the chain data at $chain_dir${C_RESET}" >&2
+        [ -n "$size" ] && echo "${C_WARN}[!]   ($size) and re-bootstraps via --fastsync.${C_RESET}" >&2
+        if ! $SNAPSHOT_YES && [ "$(yesno "Continue?" n)" != "y" ]; then
+            echo "${C_ERR}[x] Aborted.${C_RESET}" >&2
+            return 1
+        fi
+        if node_running; then
+            echo "${C_INFO}[*] stopping derod...${C_RESET}" >&2
+            cmd_stop || return 1
+        fi
+        echo "${C_INFO}[*] wiping chain data...${C_RESET}" >&2
+        rm -rf "$chain_dir"
+    fi
+    # Fresh bootstrap: fastsync on, no prune (derod can't prune an empty chain).
+    CFG_FASTSYNC=true
+    CFG_PRUNE_HISTORY=""
+    save_config
+    echo "${C_OK}[*] chain reset — bootstrapping via fastsync.${C_RESET}" >&2
+    cmd_start
 }
 
 cmd_snapshot() {
@@ -546,15 +782,29 @@ case "$ACTION" in
     stop)        cmd_stop ;;
     status)      cmd_status ;;
     update)      cmd_update ;;
+    build)       cmd_build ;;
     snapshot)    cmd_snapshot ;;
     restore)     cmd_restore ;;
-    *)           menu; case "$ACTION" in
-                     start)   cmd_start ;;
-                     stop)    cmd_stop ;;
-                     status)  cmd_status ;;
-                     update)  cmd_update ;;
-                     snapshot) cmd_snapshot ;;
-                     restore) cmd_restore ;;
-                     reconfigure) cmd_reconfigure ;;
-                 esac ;;
+    resync)      cmd_resync ;;
+    logs)        cmd_logs ;;
+    *)           # Menu-driven: dispatch the chosen action, then come back to
+                 # the menu instead of exiting (q in the menu quits). Nonzero
+                 # action exits are swallowed so a failure shows the menu again
+                 # rather than kicking the user out.
+                 MENU_MODE=true
+                 while true; do
+                     menu
+                     case "$ACTION" in
+                         start)       cmd_start       || true ;;
+                         stop)        cmd_stop        || true ;;
+                         status)      cmd_status      || true ;;
+                         update)      cmd_update      || true ;;
+                         build)       cmd_build       || true ;;
+                         snapshot)    cmd_snapshot    || true ;;
+                         restore)     cmd_restore     || true ;;
+                         resync)      cmd_resync      || true ;;
+                         logs)        cmd_logs        || true ;;
+                         reconfigure) cmd_reconfigure || true ;;
+                     esac
+                 done ;;
 esac

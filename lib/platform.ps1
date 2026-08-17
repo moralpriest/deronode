@@ -1,11 +1,33 @@
 # lib/platform.ps1 — OS / arch / Termux detection.
 
+# PS 6+ auto-vars $IsWindows/$IsLinux/$IsMacOS are read-only constants there,
+# so a plain `$script:IsWindows = ...` assignment throws on PowerShell Core, and
+# the vars do not exist at all on Windows PowerShell 5.1 (which deronode.cmd
+# falls back to). Compute them once here from env + .NET and install them with
+# Set-Variable so every lib can use the script-scoped form portably on both
+# editions.
+$script:HostIsWindows = if ($IsWindows) { $true }
+    elseif ($env:OS -eq 'Windows_NT') { $true }
+    elseif ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { $true }
+    else { $false }
+$script:HostIsLinux = if ($IsLinux) { $true }
+    elseif (-not $script:HostIsWindows -and -not $IsMacOS -and
+        [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Unix) { $true }
+    else { $false }
+$script:HostIsMacOS = if ($IsMacOS) { $true }
+    elseif (-not $script:HostIsWindows -and -not $script:HostIsLinux -and
+        [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::MacOSX) { $true }
+    else { $false }
+Set-Variable -Name IsWindows -Scope Script -Value $script:HostIsWindows -Force
+Set-Variable -Name IsLinux   -Scope Script -Value $script:HostIsLinux -Force
+Set-Variable -Name IsMacOS   -Scope Script -Value $script:HostIsMacOS -Force
+
 function Get-PwshPlatform {
     $os = 'linux'
     $arch = 'amd64'
-    if ($IsLinux) { $os = 'linux' }
-    elseif ($IsMacOS) { $os = 'darwin' }
-    elseif ($IsWindows) { $os = 'windows' }
+    if ($script:IsLinux) { $os = 'linux' }
+    elseif ($script:IsMacOS) { $os = 'darwin' }
+    elseif ($script:IsWindows) { $os = 'windows' }
     elseif ($env:OS -eq 'Windows_NT') { $os = 'windows' }
     else {
         $dotNet = [System.Environment]::OSVersion.Platform

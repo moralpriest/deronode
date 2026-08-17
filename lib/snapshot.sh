@@ -10,12 +10,21 @@ SNAPSHOT_INCLUDE=(balances bltx_store topo.map)
 SNAPSHOT_EXCLUDE=(peers.json trusted_peers.json ban_list.json config.json config_pool.json)
 
 # Directory that holds the chain state: data_dir/mainnet if it exists, else
-# data_dir itself (flat layout).
+# data_dir itself (flat layout). For an externally-installed derod we resolve
+# the external node's real data dir (its cwd / unit WorkingDirectory) instead of
+# deronode's configured data_dir, which may be an unrelated scaffold.
 snapshot_chain_dir() {
-    if [ -d "$DATA_DIR_REAL/mainnet" ] && [ -e "$DATA_DIR_REAL/mainnet/topo.map" ]; then
-        echo "$DATA_DIR_REAL/mainnet"
+    local base
+    if external_installed 2>/dev/null; then
+        base="$(external_data_dir 2>/dev/null)"
+        [ -n "$base" ] || base="$DATA_DIR_REAL"
     else
-        echo "$DATA_DIR_REAL"
+        base="$DATA_DIR_REAL"
+    fi
+    if [ -d "$base/mainnet" ] && [ -e "$base/mainnet/topo.map" ]; then
+        echo "$base/mainnet"
+    else
+        echo "$base"
     fi
 }
 
@@ -28,15 +37,25 @@ snapshot_height() {
 
 # PIDs of actual derod daemon processes. We match the executable name (comm)
 # rather than the full cmdline, because cmdline matches falsely hit unrelated
-# processes whose paths contain "deronode".
+# processes whose paths contain "deronode". Linux uses /proc/$pid/comm (no
+# truncation); other platforms use ps (BSD comm is truncated to 16 chars, but
+# every derod binary starts with "derod").
 snapshot_derod_pids() {
     local pid comm
-    while IFS= read -r pid; do
-        comm="$(cat "/proc/$pid/comm" 2>/dev/null)"
-        case "$comm" in
-            derod*) echo "$pid" ;;
-        esac
-    done < <(pgrep -f '[d]erod' 2>/dev/null)
+    if [ "$OS" = "linux" ]; then
+        while IFS= read -r pid; do
+            comm="$(cat "/proc/$pid/comm" 2>/dev/null)"
+            case "$comm" in
+                derod*) echo "$pid" ;;
+            esac
+        done < <(pgrep -f '[d]erod' 2>/dev/null)
+    else
+        ps -axo pid=,comm= 2>/dev/null | while read -r pid comm; do
+            case "$comm" in
+                derod*) echo "$pid" ;;
+            esac
+        done
+    fi
 }
 
 # True when a derod is running against THIS data dir: RPC live on the
@@ -46,9 +65,15 @@ snapshot_running_on_data_dir() {
     if node_running 2>/dev/null; then return 0; fi
     [ -f "$INSTALL_DIR/derod.pid" ] && return 0
     local pid
-    while IFS= read -r pid; do
-        if grep -qa -- "--data-dir=$DATA_DIR_REAL" "/proc/$pid/cmdline" 2>/dev/null; then return 0; fi
-    done < <(snapshot_derod_pids)
+    if [ "$OS" = "linux" ]; then
+        while IFS= read -r pid; do
+            if grep -qa -- "--data-dir=$DATA_DIR_REAL" "/proc/$pid/cmdline" 2>/dev/null; then return 0; fi
+        done < <(snapshot_derod_pids)
+    else
+        while IFS= read -r pid; do
+            if ps -o args= -p "$pid" 2>/dev/null | grep -q -- "--data-dir=$DATA_DIR_REAL"; then return 0; fi
+        done < <(snapshot_derod_pids)
+    fi
     return 1
 }
 
@@ -98,12 +123,20 @@ snapshot_stdin_tty() {
 snapshot_pack() {
     local chain_dir out_dir level ts height name raw_size exc e out sha
     chain_dir="$(snapshot_chain_dir)"
-    out_dir="${SNAPSHOT_DIR:-${SNAPSHOT_DIR_REAL:-$HOME/Crypto/dero/snapshots}}"
+    out_dir="${SNAPSHOT_DIR:-${SNAPSHOT_DIR_REAL:-$INSTALL_DIR/snapshots}}"
     level="${CFG_SNAPSHOT_LEVEL:-10}"
     [ "${SNAPSHOT_MAX_RATIO:-false}" = "true" ] && level=19
 
     if [ ! -d "$chain_dir" ]; then
         echo "${C_ERR}[x] chain data not found at $chain_dir (nothing to snapshot)${C_RESET}" >&2
+        return 1
+    fi
+    local missing=""
+    for item in "${SNAPSHOT_INCLUDE[@]}"; do
+        [ -e "$chain_dir/$item" ] || missing="$missing $item"
+    done
+    if [ -n "$missing" ]; then
+        echo "${C_ERR}[x] chain dir incomplete at $chain_dir — missing:${missing}${C_RESET}" >&2
         return 1
     fi
     if snapshot_running_on_data_dir && [ "${SNAPSHOT_KEEP_RUNNING:-false}" != "true" ]; then
@@ -127,8 +160,17 @@ snapshot_pack() {
         return 0
     fi
 
-    if ! command -v tar >/dev/null 2>&1 || ! command -v zstd >/dev/null 2>&1; then
-        echo "${C_ERR}[x] snapshot needs GNU tar and zstd${C_RESET}" >&2
+    if ! command -v tar >/dev/null 2>&1; then
+        echo "${C_ERR}[x] snapshot needs tar${C_RESET}" >&2
+        return 1
+    fi
+    # zstd CLI (brew install zstd / winget install zstandard) is preferred;
+    # GNU tar --zstd and modern bsdtar (macOS, Win10+) work without it.
+    local have_zstd=false have_tarzstd=false
+    command -v zstd >/dev/null 2>&1 && have_zstd=true
+    tar --help 2>/dev/null | grep -q -- '--zstd' && have_tarzstd=true
+    if ! $have_zstd && ! $have_tarzstd; then
+        echo "${C_ERR}[x] snapshot needs the zstd CLI (brew install zstd / winget install zstandard) or a tar with --zstd support${C_RESET}" >&2
         return 1
     fi
 
@@ -140,12 +182,22 @@ snapshot_pack() {
     exc=()
     for e in "${SNAPSHOT_EXCLUDE[@]}"; do exc+=(--exclude="$e"); done
 
-    if tar "${exc[@]}" -C "$chain_dir" -cf - "${SNAPSHOT_INCLUDE[@]}" \
-            | zstd -T0 -q -"$level" --long=27 -o "$out.tmp"; then
+    local ok=false
+    if $have_zstd; then
+        if tar "${exc[@]}" -C "$chain_dir" -cf - "${SNAPSHOT_INCLUDE[@]}" \
+                | zstd -T0 -q -"$level" --long=27 -o "$out.tmp"; then
+            ok=true
+        fi
+    else
+        if tar --zstd "${exc[@]}" -C "$chain_dir" -cf "$out.tmp" "${SNAPSHOT_INCLUDE[@]}" 2>/dev/null; then
+            ok=true
+        fi
+    fi
+    if $ok; then
         mv "$out.tmp" "$out"
     else
         rm -f "$out.tmp"
-        echo "${C_ERR}[x] snapshot failed${C_RESET}" >&2
+        echo "${C_ERR}[x] snapshot failed — see the tar/zstd error above${C_RESET}" >&2
         return 1
     fi
 
@@ -182,11 +234,23 @@ snapshot_pack() {
     return 0
 }
 
+# Newest dero-mainnet-*.tar.zst in the snapshot dir, by mtime (newest name as a
+# tie-break/fallback). Echoes the path or nothing when no snapshot exists.
+snapshot_latest_archive() {
+    local dir="${SNAPSHOT_DIR:-${SNAPSHOT_DIR_REAL:-$INSTALL_DIR/snapshots}}"
+    [ -d "$dir" ] || return 1
+    ls -1t "$dir"/dero-mainnet-*.tar.zst 2>/dev/null | head -1
+}
+
 snapshot_restore() {
     local archive="$SNAPSHOT_FROM" chain_dir mani_h bak ts tmp ok item
     if [ -z "$archive" ]; then
-        echo "${C_ERR}[x] restore needs --from=<archive>${C_RESET}" >&2
-        return 1
+        archive="$(snapshot_latest_archive)"
+        if [ -z "$archive" ]; then
+            echo "${C_ERR}[x] no snapshot found in ${SNAPSHOT_DIR:-${SNAPSHOT_DIR_REAL:-$INSTALL_DIR/snapshots}} — pass --from=<archive>${C_RESET}" >&2
+            return 1
+        fi
+        echo "${C_INFO}[*] using latest snapshot: $(basename "$archive")${C_RESET}"
     fi
     if [ ! -f "$archive" ]; then
         echo "${C_ERR}[x] archive not found: $archive${C_RESET}" >&2

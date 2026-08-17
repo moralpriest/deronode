@@ -45,8 +45,10 @@ load_config() {
     CFG_INTEGRATOR_ADDRESS="$(cfg_get '.integrator_address // ""')"
     CFG_SYNC_PROFILE="$(cfg_get '.sync_profile // "pruned"')"
     CFG_FASTSYNC="$(b2s "$(cfg_get '.fastsync // false')")"
-    CFG_PRUNE_HISTORY="$(cfg_get '.prune_history // 100000')"
-    [ "$CFG_PRUNE_HISTORY" = "null" ] && CFG_PRUNE_HISTORY=""
+    # Distinguish absent (in-memory default 100000) from an explicit null,
+    # which means "no prune flag" (mirrors config.ps1; round-trips the
+    # sync-profile full/none save). `// 100000` alone would re-coerce null.
+    CFG_PRUNE_HISTORY="$(cfg_get 'if has("prune_history") then (.prune_history // "") else 100000 end')"
     CFG_NODE_TAG="$(cfg_get '.node_tag // ""')"
     CFG_GETWORK_BIND="$(cfg_get '.getwork_bind // "127.0.0.1:10100"')"
     CFG_DATA_DIR="$(cfg_get '.data_dir // ""')"
@@ -62,9 +64,14 @@ load_config() {
     CFG_DEBUG="$(b2s "$(cfg_get '.debug // false')")"
     CFG_TIME_IS_IN_SYNC="$(b2s "$(cfg_get '.time_is_in_sync // false')")"
     CFG_SYNC_NODE="$(b2s "$(cfg_get '.sync_node // false')")"
-    readarray -t CFG_ADD_PRIORITY_NODE < <(cfg_get_arr '.add_priority_node')
-    readarray -t CFG_ADD_EXCLUSIVE_NODE < <(cfg_get_arr '.add_exclusive_node')
-    readarray -t CFG_EXTRA_ARGS < <(cfg_get_arr '.extra_args')
+    # Bash 3.2 (macOS default) has no readarray/mapfile — read into arrays
+    # with an explicit loop.
+    CFG_ADD_PRIORITY_NODE=()
+    while IFS= read -r line; do [ -n "$line" ] && CFG_ADD_PRIORITY_NODE+=("$line"); done < <(cfg_get_arr '.add_priority_node')
+    CFG_ADD_EXCLUSIVE_NODE=()
+    while IFS= read -r line; do [ -n "$line" ] && CFG_ADD_EXCLUSIVE_NODE+=("$line"); done < <(cfg_get_arr '.add_exclusive_node')
+    CFG_EXTRA_ARGS=()
+    while IFS= read -r line; do [ -n "$line" ] && CFG_EXTRA_ARGS+=("$line"); done < <(cfg_get_arr '.extra_args')
     CFG_SNAPSHOT_DIR="$(cfg_get '.snapshot_dir // ""')"
     CFG_SNAPSHOT_LEVEL="$(cfg_get '.snapshot_level // 10')"
     resolve_paths
@@ -75,9 +82,10 @@ resolve_paths() {
     LOG_DIR_REAL="${CFG_LOG_DIR:-$INSTALL_DIR/logs}"
     if [ -n "$CFG_SNAPSHOT_DIR" ]; then
         SNAPSHOT_DIR_REAL="$CFG_SNAPSHOT_DIR"
-    elif [ -n "$HOME" ]; then
-        SNAPSHOT_DIR_REAL="$HOME/Crypto/dero/snapshots"
     else
+        # Same tree as the derod binary/install (bin/derod/derod sits under
+        # INSTALL_DIR) — snapshots live next to the node, not in the old
+        # ~/Crypto/dero external-node path.
         SNAPSHOT_DIR_REAL="$INSTALL_DIR/snapshots"
     fi
 }
@@ -148,6 +156,21 @@ validate_config() {
     esac
 }
 
+# Lowest NON-GENESIS block height still present in bltx_store, or empty. derod
+# names block files <hash>.block_<difficulty>_<snapshot_version>_<height> (see
+# storefs.go). A completed --prune-history deletes everything below the prune
+# point, leaving only the genesis block (height 0) plus a rolling window of
+# recent blocks near the tip — so the lowest remaining height above genesis is
+# the prune floor. Height 0 must be excluded: genesis is always kept, so
+# including it would make every pruned chain look unpruned.
+chain_min_block_height() {
+    local bltx="$DATA_DIR_REAL/mainnet/bltx_store"
+    [ -d "$bltx" ] || return 1
+    find "$bltx" -type f -name '*.block_*' 2>/dev/null \
+        | sed -n 's/.*\.block_[0-9]*_[0-9]*_\([0-9]*\)$/\1/p' \
+        | awk '$1 != 0' | sort -n | head -1
+}
+
 # Build the derod argv into global array DEROD_ARGV.
 build_derod_argv() {
     DEROD_ARGV=()
@@ -155,8 +178,38 @@ build_derod_argv() {
     [ "$CFG_DEBUG" = "true" ] && DEROD_ARGV+=(--debug)
     [ "$CFG_TIME_IS_IN_SYNC" = "true" ] && DEROD_ARGV+=(--timeisinsync)
     [ "$CFG_SYNC_NODE" = "true" ] && DEROD_ARGV+=(--sync-node)
-    [ "$CFG_FASTSYNC" = "true" ] && DEROD_ARGV+=(--fastsync)
-    [ -n "$CFG_PRUNE_HISTORY" ] && DEROD_ARGV+=(--prune-history="$CFG_PRUNE_HISTORY")
+    # fastsync is a bootstrap-only flag — derod only honors it while the chain
+    # is fresh, and re-running it on a synced chain redoes the fastsync
+    # bootstrap. Once the chain has blocks (topo.map exists) drop it; use
+    # 'deronode resync' to force a fresh bootstrap.
+    if [ "$CFG_FASTSYNC" = "true" ]; then
+        if [ -f "$DATA_DIR_REAL/mainnet/topo.map" ]; then
+            echo "${C_WARN}[!] chain already bootstrapped at ${DATA_DIR_REAL:-<data-dir>} — skipping --fastsync (use 'deronode resync' to re-bootstrap)${C_RESET}" >&2
+        else
+            DEROD_ARGV+=(--fastsync)
+        fi
+    fi
+    # derod refuses --prune-history on a chain with <50 blocks and exits
+    # ("We need atleast 50 blocks to prune"). Defer it until the fastsync
+    # bootstrap has produced blocks (topo.map exists in the chain dir).
+    if [ -n "$CFG_PRUNE_HISTORY" ]; then
+        if [ -f "$DATA_DIR_REAL/mainnet/topo.map" ]; then
+            local min_h
+            min_h="$(chain_min_block_height 2>/dev/null || true)"
+            # Prune is a one-shot rewrite: once the oldest retained (non-genesis)
+            # block is already at/above the prune point, re-passing
+            # --prune-history would make derod redo the whole multi-hour rewrite
+            # on every start for nothing. Allow a 1000-block margin for the
+            # rolling window derod keeps near the tip.
+            if [ -n "$min_h" ] && [ "$min_h" -ge $((CFG_PRUNE_HISTORY - 1000)) ] 2>/dev/null; then
+                echo "${C_WARN}[!] chain at ${DATA_DIR_REAL:-<data-dir>} already pruned to topo ~$min_h — skipping --prune-history (raise --prune-history to re-prune)${C_RESET}" >&2
+            else
+                DEROD_ARGV+=(--prune-history="$CFG_PRUNE_HISTORY")
+            fi
+        else
+            echo "${C_WARN}[!] fresh chain at ${DATA_DIR_REAL:-<data-dir>} — deferring --prune-history until the chain has blocks${C_RESET}" >&2
+        fi
+    fi
     [ -n "$CFG_SOCKS_PROXY" ] && DEROD_ARGV+=(--socks-proxy="$CFG_SOCKS_PROXY")
     [ -n "$DATA_DIR_REAL" ] && DEROD_ARGV+=(--data-dir="$DATA_DIR_REAL")
     [ -n "$CFG_P2P_BIND" ] && DEROD_ARGV+=(--p2p-bind="$CFG_P2P_BIND")

@@ -14,6 +14,7 @@ $script:Platform = Get-PwshPlatform
 . (Join-Path $script:LibDir 'ui.ps1')
 . (Join-Path $script:LibDir 'config.ps1')
 . (Join-Path $script:LibDir 'download.ps1')
+. (Join-Path $script:LibDir 'build.ps1')
 . (Join-Path $script:LibDir 'rpc.ps1')
 . (Join-Path $script:LibDir 'service.ps1')
 . (Join-Path $script:LibDir 'snapshot.ps1')
@@ -28,11 +29,13 @@ $Action = 'menu'
 $AsService = $false
 $DryRun = $false
 $Reconfigure = $false
+$script:MenuMode = $false   # true while driving the interactive menu (loop back after each action)
 $script:SnapshotOut = ''
 $script:SnapshotFrom = ''
 $script:SnapshotMaxRatio = $false
 $script:SnapshotKeepRunning = $false
 $script:SnapshotYes = $false
+$script:UpdateSource = 'release'   # update source: release (download) | dev (community-dev compile)
 
 function Show-Help {
     @'
@@ -45,14 +48,19 @@ Usage: deronode [command] [options]
     start                Run derod (--service to install/start a background service)
     stop                 Stop derod
     status               Show sync status, binary tag, paths
-    update               Fetch the latest DEROFDN release; restart if running
+    update               Update derod; restart if running. --source=release (default,
+                         download) or --source=dev (compile latest community-dev)
+    build                Compile the latest community-dev source branch (Go required)
     snapshot             Create a privacy-hardened tar.zst of the chain state
     restore              Restore chain state from a snapshot (stops the node)
+    resync               Wipe the chain and re-bootstrap via --fastsync
+    logs                 Tail the node log (derod.log; follows live)
     --reconfigure        Re-run the first-run prompts (incl. data-dir / log-dir)
 
   Options:
     --dry-run            Resolve/download nothing; print the derod argv and exit
     --config=<path>      Config file (default ./config.json)
+    --source=release|dev Update source (release download or community-dev compile)
     --integrator-address=<addr>  10% rewards address
     --sync-profile=<p>   pruned | full | none (shortcut for fastsync/prune)
     --fastsync           Enable fast sync (bootstrap only)
@@ -81,7 +89,7 @@ Usage: deronode [command] [options]
     --out=<dir>          Snapshot output dir (overrides snapshot_dir)
     --keep-running       Allow snapshot while derod runs on this data dir
     --from=<archive>     Archive to restore (restore)
-    --yes                Skip snapshot/restore confirmations
+    --yes                Skip snapshot/restore/resync confirmations
     --version | -h       Version / help
 '@
 }
@@ -97,7 +105,7 @@ function Parse-Args {
     $valFlags = @('--integrator-address', '--sync-profile', '--prune-history', '--node-tag',
         '--getwork-bind', '--data-dir', '--log-dir', '--rpc-bind', '--p2p-bind', '--min-peers',
         '--max-peers', '--socks-proxy', '--add-priority-node', '--add-exclusive-node',
-        '--clog-level', '--flog-level', '--config', '--extra-arg', '--level', '--out', '--from')
+        '--clog-level', '--flog-level', '--config', '--extra-arg', '--level', '--out', '--from', '--source')
     for ($i = 0; $i -lt $Tokens.Count; $i++) {
         $a = $Tokens[$i]
         if ($valFlags -contains $a) {
@@ -138,6 +146,7 @@ function Parse-Args {
             '--keep-running' { $script:SnapshotKeepRunning = $true }
             '--from' { if ($val) { $script:SnapshotFrom = $val } }
             '--yes' { $script:SnapshotYes = $true }
+            '--source' { $script:UpdateSource = $val }
             '--config' { $script:ConfigFile = $val }
             '--dry-run' { $script:DryRun = $true; if ($script:Action -eq 'menu') { $script:Action = 'start' } }
             '--service' { $script:AsService = $true }
@@ -150,8 +159,11 @@ function Parse-Args {
             'stop' { $script:Action = 'stop' }
             'status' { $script:Action = 'status' }
             'update' { $script:Action = 'update' }
+            'build' { $script:Action = 'build' }
             'snapshot' { $script:Action = 'snapshot' }
             'restore' { $script:Action = 'restore' }
+            'resync' { $script:Action = 'resync' }
+            'logs' { $script:Action = 'logs' }
             default { Write-Host "[x] Unknown: $a" -ForegroundColor Red; exit 1 }
         }
     }
@@ -164,7 +176,7 @@ function Confirm-Disk {
         'full' { $need = 230 }
     }
     if ($need -eq 0) { return }
-    if ($IsWindows) { return }
+    if ($script:IsWindows) { return }
     $free = [int]((& df -Pk $script:DataDirReal 2>$null | Select-Object -Skip 1).ToString().Split(@(' '), [StringSplitOptions]::RemoveEmptyEntries)[3])
     if ($free -and $free -lt ($need * 1024 * 1024)) {
         Write-Host "[!] ~$need GB recommended for '$($script:CFG.sync_profile)' but $script:DataDirReal shows ~$([int]($free/1024/1024)) GB free." -ForegroundColor Yellow
@@ -215,6 +227,13 @@ function Configure {
         Resolve-Paths
     }
 
+    Write-Host ''
+    Write-Host '  Run mode:'
+    Write-Host '    1) Background system service   auto-start on boot (systemd / LaunchAgent / background)'
+    Write-Host '    2) Foreground               run in this terminal'
+    $pick = Read-Ask 'Choose' '2'
+    if ($pick -eq '1') { $script:AsService = $true } else { $script:AsService = $false }
+
     Apply-TestnetDefaults
     Export-Config
     Confirm-Disk
@@ -237,7 +256,12 @@ function Show-Menu {
         $a = Read-Ask 'Choose' '1'
         if ($a -eq '1' -or $a -eq '') {
             if (-not (Test-Path $script:ConfigFile)) { Configure }
+            # Continue straight into `start` after installing — no second menu
+            # prompt. The run-mode answer from Configure (service vs
+            # foreground) is honored, so don't reset AsService here.
             if (-not (Ensure-Binary)) { exit 1 }
+            $script:Action = 'start'
+            return
         } else { exit 0 }
     }
     while ($true) {
@@ -247,11 +271,14 @@ function Show-Menu {
         Write-Host '  2) Start as background service'
         Write-Host '  3) Stop'
         Write-Host '  4) Status'
-        Write-Host '  5) Update derod'
-        Write-Host '  6) Reconfigure'
-        Write-Host '  7) Show command line (dry-run)'
-        Write-Host '  8) Snapshot chain state (tar.zst)'
-        Write-Host '  9) Restore chain state from snapshot'
+        Write-Host '  5) Update derod (release or community-dev)'
+        Write-Host '  6) Build derod from community-dev source'
+        Write-Host '  7) Reconfigure'
+        Write-Host '  8) Show command line (dry-run)'
+        Write-Host '  9) Snapshot chain state (tar.zst)'
+        Write-Host '  10) Restore chain state from snapshot'
+        Write-Host '  11) Resync: wipe chain + re-bootstrap (fastsync)'
+        Write-Host '  12) View node logs (tail -f)'
         Write-Host '  q) Quit'
         $a = Read-Ask 'Choose' ''
         switch ($a) {
@@ -259,11 +286,22 @@ function Show-Menu {
             '2' { $script:Action = 'start'; $script:AsService = $true; return }
             '3' { $script:Action = 'stop'; return }
             '4' { $script:Action = 'status'; return }
-            '5' { $script:Action = 'update'; return }
-            '6' { $script:Action = 'reconfigure'; return }
-            '7' { $script:Action = 'start'; $script:DryRun = $true; return }
-            '8' { $script:Action = 'snapshot'; return }
-            '9' { $script:Action = 'restore'; return }
+            '5' {
+                Write-Host '    Update source:'
+                Write-Host '      1) Latest release (download)'
+                Write-Host '      2) community-dev source (compile)'
+                $pick = Read-Ask 'Choose' '1'
+                if ($pick -eq '2') { $script:UpdateSource = 'dev' } else { $script:UpdateSource = 'release' }
+                $script:Action = 'update'
+                return
+            }
+            '6' { $script:Action = 'build'; return }
+            '7' { $script:Action = 'reconfigure'; return }
+            '8' { $script:Action = 'start'; $script:DryRun = $true; return }
+            '9' { $script:Action = 'snapshot'; return }
+            '10' { $script:Action = 'restore'; return }
+            '11' { $script:Action = 'resync'; return }
+            '12' { $script:Action = 'logs'; return }
             'q' { exit 0 }
             default { Write-Host '[x] Unknown choice' -ForegroundColor Red }
         }
@@ -277,6 +315,9 @@ function Start-Node {
         $argv = Build-DerodArgv
         Write-Host 'derod command line:' -ForegroundColor DarkGray
         Write-Host "  $($script:BinaryPath) $($argv -join ' ')"
+        # Menu option 7: show the argv and fall back to the menu; a plain CLI
+        # --dry-run exits after printing (scripted callers need the exit code).
+        if ($script:MenuMode) { return }
         exit 0
     }
     if (Test-ExternalInstalled) {
@@ -291,7 +332,10 @@ function Start-Node {
     if ($script:AsService) {
         Install-Service
     } else {
+        # From the menu, run derod as a child so the menu is shown again once
+        # the node exits. Plain CLI start keeps the exit code.
         & $script:BinaryPath @argv
+        if ($script:MenuMode) { return }
         exit $LASTEXITCODE
     }
 }
@@ -304,15 +348,53 @@ function Stop-Node {
     Stop-Service
 }
 
-# Start-ExternalNode — start a system-installed (external) derod via its systemd
-# unit (sudo when system-level). No-op when already running.
+# Show-Logs — tail the node's log file live. derod writes its own structured
+# log (--log-dir) as derod.log; launchd / background backends also capture
+# stdout/stderr to derod.out.log + derod.err.log, which we fall back to.
+function Show-Logs {
+    Resolve-Paths
+    $log = Join-Path $script:LogDirReal 'derod.log'
+    if (Test-Path $log) {
+        Write-Host "[*] tailing $log (Ctrl-C to stop)" -ForegroundColor DarkCyan
+        Get-Content -Path $log -Tail 100 -Wait
+        return
+    }
+    # No derod.log yet - service stdout/stderr captures (launchd / background).
+    # Get-Content -Wait only shows existing content for the first of several
+    # files, so tail the most recently written capture (the active stream).
+    $files = @(
+        (Join-Path $script:LogDirReal 'derod.out.log'),
+        (Join-Path $script:LogDirReal 'derod.err.log')
+    ) | Where-Object { Test-Path $_ } | ForEach-Object { Get-Item $_ } | Sort-Object LastWriteTime -Descending
+    if (@($files).Count -gt 0) {
+        Write-Host "[*] tailing $($files[0].FullName) (Ctrl-C to stop)" -ForegroundColor DarkCyan
+        Get-Content -Path $files[0].FullName -Tail 100 -Wait
+        return
+    }
+    Write-Host "[!] no log files in $($script:LogDirReal) - derod hasn't written logs yet (foreground start prints to the terminal)." -ForegroundColor Yellow
+    if (Test-ExternalInstalled) {
+        $unit = Get-ExternalUnit
+        if (-not $unit) { $unit = 'derod.service' }
+        Write-Host "    externally-managed node - its logs live with its service manager (e.g. journalctl --user -u $unit -f)"
+    } elseif ((Get-ServiceBackend) -eq 'systemd') {
+        Write-Host '    systemd console stream: journalctl --user -u deronode.service -f'
+    }
+    if ($script:MenuMode) { return }
+    exit 1
+}
+
+# Start-ExternalNode — start a system-installed (external) derod: its launchd
+# agent on macOS (sudo for LaunchDaemons), its systemd unit on Linux (sudo when
+# system-level). No-op when already running.
 function Start-ExternalNode {
-    $unit = Get-ExternalUnit
     if (Test-NodeRunning) {
+        $unit = Get-ExternalUnit
         if (-not $unit) { $unit = 'derod.service' }
         Write-Host "[*] external derod already running ($unit)" -ForegroundColor DarkCyan
         return
     }
+    if ($script:IsMacOS) { Start-ExternalLaunchd; return }
+    $unit = Get-ExternalUnit
     if (-not $unit) { Write-Host '[x] No external derod unit found' -ForegroundColor Red; exit 1 }
     Write-Host "[*] starting $unit..." -ForegroundColor DarkCyan
     if (Test-ExternalSystemUnit) {
@@ -331,10 +413,12 @@ function Start-ExternalNode {
     exit 1
 }
 
-# Stop-ExternalNode — stop a system-installed (external) derod: resolve its unit
-# and stop via systemd (sudo when system-level), else kill the bare process
-# directly. Works whether the node is running or already stopped.
+# Stop-ExternalNode — stop a system-installed (external) derod: resolve its
+# unit/agent and stop via launchd on macOS or systemd on Linux (sudo when
+# system-level), else kill the bare process directly. Works whether the node is
+# running or already stopped.
 function Stop-ExternalNode {
+    if ($script:IsMacOS) { Stop-ExternalLaunchd; return }
     $unit = Get-ExternalUnit
     if ($unit) {
         Write-Host "[*] stopping $unit..." -ForegroundColor DarkCyan
@@ -363,6 +447,62 @@ function Stop-ExternalNode {
     }
     Write-Host "[*] stopped external derod (pid $($proc.Pid))" -ForegroundColor Green
 }
+
+# Start-ExternalLaunchd — start a launchd-managed external derod on macOS:
+# kickstart a loaded agent, else load its plist (sudo for LaunchDaemons).
+function Start-ExternalLaunchd {
+    $unit = Get-ExternalUnit
+    if (-not $unit) { Write-Host '[x] No external derod agent found' -ForegroundColor Red; exit 1 }
+    Write-Host "[*] starting $unit..." -ForegroundColor DarkCyan
+    $loaded = & launchctl list 2>$null | Where-Object { ($_ -split '\s+')[-1] -eq $unit } | Select-Object -First 1
+    if ($loaded) {
+        & launchctl kickstart "gui/$(id -u)/$unit" 2>$null
+        if ($LASTEXITCODE -ne 0) { & launchctl start $unit 2>$null }
+        Write-Host "[*] $unit started" -ForegroundColor Green
+        return
+    }
+    foreach ($plist in @((Join-Path $HOME "Library/LaunchAgents/$unit.plist"), "/Library/LaunchAgents/$unit.plist", "/Library/LaunchDaemons/$unit.plist")) {
+        if (-not (Test-Path $plist)) { continue }
+        & launchctl load $plist 2>$null
+        if ($LASTEXITCODE -ne 0) { & sudo -n launchctl load $plist 2>$null }
+        if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit loaded + started" -ForegroundColor Green; return }
+        if (-not [Console]::IsInputRedirected) {
+            & sudo launchctl load $plist
+            if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit loaded + started" -ForegroundColor Green; return }
+        }
+        Write-Host "[!] could not start $unit - run: sudo launchctl load $plist" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "[!] no plist found for $unit" -ForegroundColor Yellow
+    exit 1
+}
+
+# Stop-ExternalLaunchd — stop a launchd-managed external derod on macOS:
+# kickstart -k + stop a loaded agent, else unload its plist (sudo for
+# LaunchDaemons).
+function Stop-ExternalLaunchd {
+    $unit = Get-ExternalUnit
+    if (-not $unit) { Write-Host '[x] No external derod agent found' -ForegroundColor Red; exit 1 }
+    Write-Host "[*] stopping $unit..." -ForegroundColor DarkCyan
+    $loaded = & launchctl list 2>$null | Where-Object { ($_ -split '\s+')[-1] -eq $unit } | Select-Object -First 1
+    if ($loaded) {
+        & launchctl kickstart -k "gui/$(id -u)/$unit" 2>$null | Out-Null
+        & launchctl stop $unit 2>$null | Out-Null
+    }
+    foreach ($plist in @((Join-Path $HOME "Library/LaunchAgents/$unit.plist"), "/Library/LaunchAgents/$unit.plist", "/Library/LaunchDaemons/$unit.plist")) {
+        if (-not (Test-Path $plist)) { continue }
+        & launchctl unload $plist 2>$null
+        if ($LASTEXITCODE -ne 0) { & sudo -n launchctl unload $plist 2>$null }
+        if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
+        if (-not [Console]::IsInputRedirected) {
+            & sudo launchctl unload $plist
+            if ($LASTEXITCODE -eq 0) { Write-Host "[*] $unit stopped" -ForegroundColor Green; return }
+        }
+        Write-Host "[!] could not stop $unit - run: sudo launchctl unload $plist" -ForegroundColor Yellow
+        exit 1
+    }
+    Write-Host "[*] $unit stopped" -ForegroundColor Green
+}
 function Show-Status {
     Write-Banner $script:DeronodeVersion
     if ((Test-NodeRunning) -or (Test-Path $script:BinaryPath) -or (Test-ExternalInstalled)) {
@@ -373,14 +513,23 @@ function Show-Status {
     }
 }
 function Update-Node {
+    # --source=dev routes the update through the community-dev compile path.
+    if ($script:UpdateSource -eq 'dev') {
+        Build-Node
+        return
+    }
     if (-not (Resolve-Release $script:Platform)) { exit 1 }
     $old = 'none'
     $tagfile = Join-Path $script:BinDir 'derod/.tag'
     if (Test-Path $tagfile) { $old = (Get-Content $tagfile -Raw).Trim() }
-    if (Test-CacheFresh) { Write-Host "[*] Already at latest ($($script:LastTag))." -ForegroundColor Green; return }
+    # An explicit `update` always fetches the latest release — including over a
+    # community-dev source build, which is otherwise kept as fresh. Skip both
+    # "already at latest" short-circuits when the installed binary is a source
+    # build so the user can switch back to the release.
+    if (-not (Test-SourceBuild) -and (Test-CacheFresh)) { Write-Host "[*] Already at latest ($($script:LastTag))." -ForegroundColor Green; return }
     $runRel = Get-DaemonReleaseNumber
     $latestRel = if ($script:LastTag -match '(\d+)$') { $matches[1] } else { '' }
-    if ($runRel -and $latestRel -and $runRel -eq $latestRel) {
+    if (-not (Test-SourceBuild) -and $runRel -and $latestRel -and $runRel -eq $latestRel) {
         Write-Host "[*] Already at latest ($($script:LastTag))." -ForegroundColor Green
         return
     }
@@ -399,10 +548,10 @@ function Update-ExternalNode {
     $proc = Get-ProcessTable | Where-Object { $_.Name -like 'derod*' } | Select-Object -First 1
     if (-not $proc) { Write-Host '[x] Could not find the running derod process' -ForegroundColor Red; exit 1 }
     $bin = ''
-    if ($IsLinux -and (Test-Path "/proc/$($proc.Pid)/exe")) {
-        $bin = (Get-Item "/proc/$($proc.Pid)/exe").Target
-        $bin = $bin -replace ' \(deleted\)$', ''
-    }
+    try {
+        $bin = Get-ProcessExe $proc.Pid
+        if (-not $bin -and $proc.ExecutablePath) { $bin = $proc.ExecutablePath }
+    } catch { $bin = '' }
     if (-not $bin -or -not (Test-Path $bin)) { Write-Host '[x] Could not resolve the running derod binary path' -ForegroundColor Red; exit 1 }
 
     if (-not (Invoke-FetchDerod $script:Platform)) { exit 1 }
@@ -419,11 +568,26 @@ function Update-ExternalNode {
         Write-Host "[x] Replace failed: $bin ($($_.Exception.Message))" -ForegroundColor Red
         exit 1
     }
-    if ($IsWindows) { } else { & chmod +x $bin }
+    if ($script:IsWindows) { } else { & chmod +x $bin }
     Write-Host "[*] replaced $bin with $($script:LastTag)" -ForegroundColor Green
 
+    if ($script:IsMacOS) {
+        $unit = Get-ExternalUnit
+        if ($unit) {
+            Write-Host "[*] restarting $unit..." -ForegroundColor DarkCyan
+            & launchctl kickstart -k "gui/$(id -u)/$unit" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "[*] $unit restarted with $($script:LastTag)" -ForegroundColor Green
+            } else {
+                Write-Host "[!] restart $unit manually: launchctl kickstart -k gui/$(id -u)/$unit" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host '[!] external node has no launchd agent - restart it manually' -ForegroundColor Yellow
+        }
+        return
+    }
     $unit = ''
-    if ($IsLinux) {
+    if ($script:IsLinux) {
         $unit = (Get-Content "/proc/$($proc.Pid)/cgroup" -ErrorAction SilentlyContinue |
             Where-Object { $_ -match '\.service$' } | Select-Object -First 1)
         if ($unit) { $unit = ($unit -split '/')[-1] }
@@ -440,7 +604,85 @@ function Update-ExternalNode {
         Write-Host '[!] external node has no systemd unit - restart it manually' -ForegroundColor Yellow
     }
 }
-function Reconfigure-Node { Configure; Write-Host '[*] Done. Run deronode start to launch.' -ForegroundColor Green }
+# Build-Node — compile the latest DEROFDN/derohe community-dev source branch
+# with the local Go toolchain and install it as bin/derod/derod (an
+# alternative to downloading a release). Restarts a running node like update.
+# Refuses on externally-managed nodes (we never replace binaries we don't own).
+function Build-Node {
+    if ($script:DryRun) {
+        Write-Host "[*] dry-run: would clone $($script:DevRepo) ($($script:DevBranch)) and 'go build ./cmd/derod' into $($script:BinaryPath)" -ForegroundColor DarkCyan
+        return
+    }
+    if (Test-ExternalInstalled) {
+        Write-Host '[x] build only works on a deronode-managed node (an external derod is installed).' -ForegroundColor Red
+        exit 1
+    }
+    if (-not (Test-GoAvailable)) {
+        Write-Host '[x] Go toolchain not found - install Go 1.17+ (https://go.dev/dl/) to build derod from source.' -ForegroundColor Red
+        exit 1
+    }
+    $old = 'none'
+    $tagfile = Join-Path $script:BinDir 'derod/.tag'
+    if (Test-Path $tagfile) { $old = (Get-Content $tagfile -Raw).Trim() }
+    Write-Host "[*] Building derod $old -> $($script:DevBranch)" -ForegroundColor DarkCyan
+    $wasRunning = Test-NodeRunning
+    if ($wasRunning) { Stop-Service }
+    if (-not (Invoke-BuildDerodFromSource)) { exit 1 }
+    if ($wasRunning) {
+        Write-Host '[*] restarting with the freshly-built binary...' -ForegroundColor DarkCyan
+        Install-Service
+    }
+}
+
+function Reconfigure-Node {
+    Configure
+    # Continue straight into `start` after asking questions, same as the
+    # first-run install flow. Only when nothing is running — a live node
+    # must be stopped/restarted by the user instead.
+    if (Test-NodeRunning) {
+        Write-Host '[!] derod is running - stop it first (deronode stop) to apply the new config.' -ForegroundColor Yellow
+        return
+    }
+    Start-Node
+}
+
+# Invoke-Resync — wipe the chain data and re-bootstrap via --fastsync. This is
+# the "start over" path: a fresh chain (or one broken by a bad prune) gets a
+# clean fastsync bootstrap. Refuses on externally-managed nodes (we never touch
+# data we don't own). Stops a running node first, deletes the chain dir, forces
+# fastsync on and prune off (a fresh chain can't prune), then starts.
+function Invoke-Resync {
+    Resolve-Paths
+    if (Test-ExternalInstalled) {
+        Write-Host '[x] resync only works on a deronode-managed node (an external derod is installed).' -ForegroundColor Red
+        exit 1
+    }
+    if ($script:DryRun) {
+        Write-Host "[*] dry-run: would wipe $(Get-SnapshotChainDir) and re-bootstrap via --fastsync" -ForegroundColor DarkCyan
+        return
+    }
+    $chainDir = Get-SnapshotChainDir
+    if (Test-Path $chainDir) {
+        Write-Host "[!] This deletes the chain data at $chainDir" -ForegroundColor Yellow
+        Write-Host "    and re-bootstraps via --fastsync." -ForegroundColor Yellow
+        if (-not $script:SnapshotYes -and -not (Read-YesNo 'Continue?' 'n')) {
+            Write-Host '[x] Aborted.' -ForegroundColor Red
+            exit 1
+        }
+        if (Test-NodeRunning) {
+            Write-Host '[*] stopping derod...' -ForegroundColor DarkCyan
+            Stop-Node
+        }
+        Write-Host '[*] wiping chain data...' -ForegroundColor DarkCyan
+        Remove-Item $chainDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    # Fresh bootstrap: fastsync on, no prune (derod can't prune an empty chain).
+    $script:CFG.fastsync = $true
+    $script:CFG.prune_history = $null
+    Export-Config
+    Write-Host '[*] chain reset - bootstrapping via fastsync.' -ForegroundColor Green
+    Start-Node
+}
 
 function Invoke-Snapshot {
     Resolve-Paths
@@ -478,18 +720,29 @@ switch ($script:Action) {
     'stop' { Stop-Node }
     'status' { Show-Status }
     'update' { Update-Node }
+    'build' { Build-Node }
     'snapshot' { Invoke-Snapshot }
     'restore' { Invoke-Restore }
+    'resync' { Invoke-Resync }
+    'logs' { Show-Logs }
     default {
-        Show-Menu
-        switch ($script:Action) {
-            'start' { Start-Node }
-            'stop' { Stop-Node }
-            'status' { Show-Status }
-            'update' { Update-Node }
-            'snapshot' { Invoke-Snapshot }
-            'restore' { Invoke-Restore }
-            'reconfigure' { Reconfigure-Node }
+        # Menu-driven: dispatch the chosen action, then come back to the menu
+        # instead of exiting (q in the menu quits).
+        $script:MenuMode = $true
+        while ($true) {
+            Show-Menu
+            switch ($script:Action) {
+                'start' { Start-Node }
+                'stop' { Stop-Node }
+                'status' { Show-Status }
+                'update' { Update-Node }
+                'build' { Build-Node }
+                'snapshot' { Invoke-Snapshot }
+                'restore' { Invoke-Restore }
+                'resync' { Invoke-Resync }
+                'logs' { Show-Logs }
+                'reconfigure' { Reconfigure-Node }
+            }
         }
     }
 }

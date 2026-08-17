@@ -13,8 +13,8 @@ explicitly stop it first.
 cd ~/Projects/deronode
 
 # Full smoke suites — self-contained, wipe and recreate their own bin/
-bash scripts/smoke-test.sh              # expect: 88 passed, 0 failed
-pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 72 passed, 0 failed
+bash scripts/smoke-test.sh              # expect: 149 passed, 0 failed
+pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 126 passed, 0 failed
 
 # Dry-run — offline proof: prints the exact derod argv, writes nothing
 bash node.sh --dry-run --sync-profile=pruned --data-dir=/tmp/d1 --log-dir=/tmp/d2
@@ -26,6 +26,11 @@ were created.
 
 ## 1b. Snapshot/restore smoke
 
+The default snapshot dir is `<install>/snapshots` — the same tree as the
+`bin/derod/derod` binary — not the old `~/Crypto/dero/snapshots` external-node
+path. `snapshot_dir` in config.json (or `--out=`) still overrides it.
+(Sections 6 bash / 6 ps cover the default + explicit override.)
+
 Both suites include an offline snapshot fixture (section 11 bash / 6c ps):
 it builds a fake chain dir (3 members + 5 decoy files), packs it, and asserts
 the archive contains only `balances`/`bltx_store`/`topo.map`, the 5 identity
@@ -35,13 +40,157 @@ overrides, and restore reproduces the includes while omitting decoys and
 keeping a `.bak-<ts>`.
 
 When the snapshot is triggered interactively while the node is running against
-the data dir (e.g. menu option 8), the wrapper now prompts
+the data dir (e.g. menu option 9), the wrapper now prompts
 `stop it, snapshot, then restart? [Y/n]`; answering yes stops the node, packs
 the snapshot, then restarts it (external via its systemd unit, managed via
 service install). The prompt only appears on an interactive terminal — piped or
 scripted `deronode snapshot` calls never auto-stop and fall through to the
 library guard, which keeps refusing unless `--keep-running` is passed.
 (Sections 15 bash / 10 ps cover this prompt-to-stop flow.)
+
+For an externally-installed derod (systemd unit), the snapshot/restore target is
+auto-resolved to the external node's real data dir — the running process's cwd,
+or the unit's `WorkingDirectory=` (fallback `--data-dir=` from ExecStart) when
+stopped — instead of deronode's configured `data_dir`. This fixes the failure
+where snapshot tars an empty scaffold and reports a bare `[x] snapshot failed`.
+`snapshot_pack` now pre-validates that `balances`/`bltx_store`/`topo.map` exist
+in the resolved chain dir and names any missing member in its error.
+(Sections 11 bash / 6c ps cover external data-dir resolution and the
+missing-member pre-check.)
+
+`restore` without `--from` auto-picks the newest `dero-mainnet-*.tar.zst` in the
+snapshot dir and reports which archive it chose; it errors with `no snapshot
+found in <dir>` when the dir is empty. (Sections 11 bash / 6c ps cover both.)
+
+Every command/flag also works on macOS and Windows, not just Linux:
+
+- **PowerShell 5.1 + Core**: `lib/platform.ps1` computes `$script:IsWindows/`
+  `IsLinux/IsMacOS` via `Set-Variable` because plain `$script:IsWindows = ...`
+  throws on PS 6+ (the auto-vars are read-only constants there) and the vars
+  don't exist on 5.1. `Get-PwshPlatform` uses the script-scoped forms.
+- **External node on macOS**: `start`/`stop`/`update` route to the launchd
+  agent (`launchctl kickstart/load/unload`, sudo for LaunchDaemons) and
+  `Get-ExternalUnit`/`Test-ExternalSystemUnit`/`Get-ExternalDataDir` detect
+  agents and read plist `WorkingDirectory`/`--data-dir` (bash +
+  PowerShell). Our own `org.deronode.derod` agent is never treated as external.
+- **External node on Windows**: the process table captures
+  `Win32_Process.ExecutablePath`, so `Test-ExternalNode` and
+  `Update-ExternalNode` resolve the running binary without `/proc`.
+- **Portable process probes**: `derod_pid`/`process_exe`/`process_cwd` (bash)
+  and `Get-ProcessExe`/`Get-ProcessCwd` (PS) use `/proc` on Linux, `lsof` on
+  macOS, and CIM on Windows; `cmd_update_external` no longer hardcodes
+  `derod-linux-amd64` or `/proc/<pid>/cgroup`.
+
+New tests: bash section 11 adds `external_data_dir_from_plist`
+(WorkingDirectory + `--data-dir` fallback) and source-greps that `external_unit`
+excludes our launchd agent and `cmd_update_external` is portable; PS sections
+4/6c/8 add `Get-DataDirFromPlist`, the `Set-Variable` guard, launchd routing in
+`Start`/`Stop`/`Update-ExternalNode`, and the Windows `ExecutablePath` capture.
+
+First-run flow: when the menu's "Configure & install derod" finishes the
+download, it continues straight into `start` (foreground) instead of bouncing
+back to the menu prompt. (Sections 14 bash / 9 ps cover the transition.)
+
+Prune round-trip: an explicit `"prune_history": null` in config.json means
+"no --prune-history flag" (needed to bootstrap a fresh chain — derod exits
+with `Error pruning blockchain: We need atleast 50 blocks to prune` when asked
+to prune an empty chain). `lib/config.sh` previously re-coerced the saved null
+back to 100000 via `// 100000`; it now distinguishes absent (default 100000)
+from explicit null (no flag), matching `config.ps1`. (Sections 6 bash / 6 ps
+cover the null round-trip.)
+
+Fresh-chain flag balancing: both fastsync and prune are bootstrap-aware and
+keyed off the chain dir's `topo.map`. When the chain dir has no `topo.map` yet
+(fresh chain), `build_derod_argv`/`Build-DerodArgv` pass `--fastsync` and drop
+`--prune-history` with a warning — derod refuses to prune <50 blocks and would
+exit instead of bootstrapping. Once `topo.map` exists (chain has blocks), the
+opposite happens: `--prune-history` applies and `--fastsync` is dropped with a
+warning, because fastsync is a bootstrap-only flag and re-running it on a
+synced chain redoes the bootstrap — the fix for "starting the node re-runs
+fastsync every time". Use `deronode resync` to force a fresh fastsync
+bootstrap. (Sections 7 bash / 6 ps cover the argv balancing, including the
+dry-run: fresh dir keeps `--fastsync`, established dir skips it.)
+
+Prune is also once-per-chain: derod's `--prune-history` is a full rewrite of
+`balances` (hours of block-by-block replay on a synced chain) that re-runs on
+every start passing the flag. `build_derod_argv`/`Build-DerodArgv` now detect an
+already-pruned chain from `bltx_store` — derod names block files
+`<hash>.block_<diff>_<ver>_<height>`, and a completed prune deletes everything
+below the prune point, leaving only the genesis block (height 0) plus a rolling
+window of recent blocks near the tip. `chain_min_block_height`/
+`Get-ChainMinBlockHeight` therefore take the minimum `height` field *excluding*
+genesis (height 0 is always kept, so including it would make every pruned chain
+look unpruned), and the flag is skipped with a warning when that floor is
+already at/above `prune_history - 1000`. (Sections 7 bash / 6 ps cover both the
+pruned-chain skip and the unpruned-chain keep; the fixtures include a genesis
+block at height 0 to match real pruned chains.)
+
+Build from source: `deronode build` (menu option 6) compiles the latest
+DEROFDN/derohe **`community-dev`** branch with the local Go toolchain
+(`go build ./cmd/derod`) and installs the binary into `bin/derod/derod`, same
+as a release download. It shallow-clones into `bin/src/derohe` (later builds
+just fetch + reset), guards on Go 1.17+ being installed, restarts a running
+node after building (mirroring `update`), and refuses on externally-managed
+nodes. The install is marked via `bin/derod/.asset` = `community-dev`:
+`start`/`status` keep it (a source build is always "fresh" to
+`cached_tag_fresh`/`Test-CacheFresh`), while an explicit `update` skips those
+short-circuits and swaps back to the latest release. (Sections 14 bash / 9 ps
+cover the parse/menu/dispatch wiring and the keep-vs-swap logic.)
+
+`update` itself takes a **source choice**: `deronode update --source=dev`
+routes through the community-dev compile path (identical to `build`), while
+the default `--source=release` fetches the release download. The menu's
+"Update derod" option (5) asks `1) Latest release (download)` vs
+`2) community-dev source (compile)` before dispatching. (Sections 6 + 14 bash
+/ 6 + 9 ps cover the `--source` parse and the dev-source routing.)
+
+Resync command: `deronode resync` (menu option 11) wipes the chain data and
+re-bootstraps via `--fastsync` — the "start over" path for a broken or unwanted
+chain. It confirms first (`--yes` skips), stops a running node, deletes the
+chain dir, forces `fastsync: true` + `prune_history: null` in the config, then
+continues into `start`. Refuses on externally-managed nodes, and `--dry-run`
+only prints the plan. (Sections 14 bash / 9 ps cover the wiring and wipe logic.)
+
+Reconfigure continues into start: after `--reconfigure`/menu option 7 finishes
+asking questions, it continues straight into `start` (like first-run install)
+instead of printing "Done. Run 'deronode start' to launch." — unless derod is
+already running, in which case it tells you to stop it first. (Sections 14
+bash / 9 ps cover both branches.)
+
+Run mode is part of the install questions: `configure`/`Configure` ends with a
+"Run mode" prompt — `1) Background system service` (auto-start on boot) or
+`2) Foreground` — and the answer feeds the existing `AS_SERVICE`/`AsService`
+flag, so the node is installed as a systemd user unit (Linux), LaunchAgent
+(macOS), or background process (Windows) right from first-run instead of only
+via `deronode start --service`. The first-run and reconfigure continuations
+into `start` carry the answer through. (Sections 14 bash / 9 ps cover the
+question + that first-run keeps the choice.)
+
+Archive cache: `fetch_derod`/`Invoke-FetchDerod` keep the downloaded release
+archive under `bin/archives/<tag>/` instead of deleting it after install. A
+later install/update of the same tag reuses the cached file ("Reusing cached
+…") — no re-download — while still re-verifying it against `checksum.txt`; a
+corrupt cache fails the checksum and is discarded + re-fetched, and an offline
+run falls back to the cached archive when `checksum.txt` can't be fetched.
+(Section 13b bash covers the cache hit + corrupt-cache re-download; PS section
+8 source-greps the wiring.)
+
+Menu returns to the menu: `deronode` with no arguments is an interactive loop.
+Every action is dispatched and then the menu is shown again — stop, status,
+update, snapshot, restore, resync, logs, even foreground `start` (run as a
+child, so the menu reappears when the node exits). Nonzero action exits are
+swallowed in menu mode so a failure can't kick you out; only `q` quits. Plain
+CLI invocations (`deronode start` etc.) keep their old single-shot exit
+behavior. (Sections 14 bash / 9 ps cover the loop + menu-mode start.)
+
+Logs command: `deronode logs` (menu option 12) tails the node log live —
+derod's own structured `derod.log` (written via `--log-dir`) when present,
+otherwise the newest of the stdout/stderr captures (`derod.out.log` /
+`derod.err.log`) that launchd / background backends write. No log file yet →
+exits 1 and suggests the right stream (`journalctl --user -u deronode.service
+-f` for the systemd console output). `tail` follows live; Ctrl-C stops it and
+menu mode returns to the prompt. (Sections 14 bash / 9 ps cover the
+parse/menu/dispatch wiring and the tail-selection logic.)
 
 Manual smoke against the real (stopped) node:
 
@@ -116,10 +265,13 @@ bash node.sh update
 
 - First `start` on a fresh data dir bootstraps via fastsync; height climbs
   1-by-1 on a clean chain and `peers 0` is normal until seeds are reached.
+  Later starts on the same chain drop `--fastsync` ("chain already bootstrapped
+  … skipping --fastsync") — fastsync only runs while bootstrapping, never on
+  an established chain.
 - `--prune-history` on a fresh chain with fewer than ~50 blocks makes derod exit
-  with "Error pruning blockchain: We need atleast 50 blocks to prune". That is a
-  derod limitation, not a deronode bug — use `--sync-profile=full` for clean-dir
-  tests.
+  with "Error pruning blockchain: We need atleast 50 blocks to prune". deronode
+  now defers the flag automatically on a fresh chain (see above), so a clean-dir
+  start bootstraps fine; pruning applies on the next start once blocks exist.
 - Clean up after a live test:
 
 ```bash

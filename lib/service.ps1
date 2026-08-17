@@ -14,11 +14,11 @@ function Write-RunWrapper {
 }
 
 function Get-ServiceBackend {
-    if ($IsLinux -and (Get-Command systemctl -ErrorAction SilentlyContinue)) {
+    if ($script:IsLinux -and (Get-Command systemctl -ErrorAction SilentlyContinue)) {
         $st = & systemctl --user is-system-running 2>$null
         if ($LASTEXITCODE -eq 0) { return 'systemd' }
     }
-    if ($IsMacOS) { return 'launchd' }
+    if ($script:IsMacOS) { return 'launchd' }
     return 'pid'
 }
 
@@ -52,7 +52,8 @@ WantedBy=default.target
             $plistDir = Join-Path $HOME 'Library/LaunchAgents'
             New-Item -ItemType Directory -Path $plistDir -Force | Out-Null
             $plist = Join-Path $plistDir 'org.deronode.derod.plist'
-            $logFile = Join-Path $script:LogDirReal 'derod.log'
+            $logFile = Join-Path $script:LogDirReal 'derod.out.log'
+            $errLogFile = Join-Path $script:LogDirReal 'derod.err.log'
             @"
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -64,7 +65,7 @@ WantedBy=default.target
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>StandardOutPath</key><string>$logFile</string>
-    <key>StandardErrorPath</key><string>$logFile</string>
+    <key>StandardErrorPath</key><string>$errLogFile</string>
 </dict>
 </plist>
 "@ | Set-Content $plist -Encoding ASCII
@@ -81,9 +82,10 @@ WantedBy=default.target
 function Start-Background {
     $wrapper = Write-RunWrapper
     New-Item -ItemType Directory -Path $script:LogDirReal -Force | Out-Null
-    $log = Join-Path $script:LogDirReal 'derod.log'
+    $log = Join-Path $script:LogDirReal 'derod.out.log'
+    $errLog = Join-Path $script:LogDirReal 'derod.err.log'
     $hostExe = if ($PSVersionTable.PSEdition -eq 'Core') { 'pwsh' } else { 'powershell' }
-    $p = Start-Process -FilePath $hostExe -ArgumentList @('-NoProfile', '-File', $wrapper) -RedirectStandardOutput $log -RedirectStandardError $log -WindowStyle Hidden -PassThru
+    $p = Start-Process -FilePath $hostExe -ArgumentList @('-NoProfile', '-File', $wrapper) -RedirectStandardOutput $log -RedirectStandardError $errLog -WindowStyle Hidden -PassThru
     Set-Content (Join-Path $InstallDir 'derod.pid') $p.Id -NoNewline
     Write-Host "[*] derod started in background (pid $($p.Id))" -ForegroundColor Green
     Write-Host "    log: $log"

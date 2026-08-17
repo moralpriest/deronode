@@ -34,11 +34,15 @@ resolve_release() {
 }
 
 # bin/derod/.tag holds the tag the cached binary came from. Fresh when it
-# matches a resolved tag, or within the freshness window.
+# matches a resolved tag, or within the freshness window. A community-dev
+# source build (is_source_build) is always treated as fresh — `start` must
+# never silently replace it with a release download; only an explicit
+# `update` swaps back to the release.
 cached_tag_fresh() {
     local tagfile="$BIN_DIR/derod/.tag"
     [ -f "$BIN_DIR/derod/derod" ] || return 1
     [ -f "$tagfile" ] || return 1
+    is_source_build && return 0
     [ "$(cat "$tagfile" 2>/dev/null)" = "$LAST_TAG" ] && return 0
     # Fall back to a freshness window so repeated runs skip the release API.
     local tf="$BIN_DIR/derod/.tagtime" now secs
@@ -77,20 +81,42 @@ find_derod_in() {
 }
 
 # Download + verify + extract + lift the daemon into bin/derod/derod.
+# The archive is kept in bin/archives/<tag>/ so an already-downloaded release
+# is not fetched again: a later install of the same tag reuses the cached file
+# (re-verified against checksum.txt; a corrupt cache is discarded and refetched).
 fetch_derod() {
     mkdir -p "$BIN_DIR/derod"
-    local tmp ar url checksum cs_name
+    local tmp ar url checksum cache_dir cache_ar reused=0
     tmp="$(mktemp -d "${TMPDIR:-/tmp}/deronode.XXXXXX")"
     ar="$tmp/$LAST_ASSET"
     url="$GH_DL/$LAST_TAG/$LAST_ASSET"
+    cache_dir="$BIN_DIR/archives/$LAST_TAG"
+    cache_ar="$cache_dir/$LAST_ASSET"
+    mkdir -p "$cache_dir"
 
-    echo "${C_INFO}[*] Downloading $LAST_ASSET (tag $LAST_TAG)${C_RESET}" >&2
-    curl -fL "$url" -o "$ar" || { rm -rf "$tmp"; echo "${C_ERR}[x] Download failed${C_RESET}" >&2; return 1; }
+    if [ -f "$cache_ar" ]; then
+        echo "${C_INFO}[*] Reusing cached $LAST_ASSET (tag $LAST_TAG)${C_RESET}" >&2
+        cp -f "$cache_ar" "$ar" || { rm -rf "$tmp"; echo "${C_ERR}[x] Could not read cached archive${C_RESET}" >&2; return 1; }
+        reused=1
+    else
+        echo "${C_INFO}[*] Downloading $LAST_ASSET (tag $LAST_TAG)${C_RESET}" >&2
+        curl -fL "$url" -o "$ar" || { rm -rf "$tmp"; echo "${C_ERR}[x] Download failed${C_RESET}" >&2; return 1; }
+    fi
 
     checksum="$tmp/checksum.txt"
     if curl -fsL "$GH_DL/$LAST_TAG/checksum.txt" -o "$checksum" 2>/dev/null; then
         if verify_checksum "$ar" "$checksum" "$LAST_ASSET"; then
             echo "${C_OK}[*] checksum verified against checksum.txt${C_RESET}" >&2
+        elif [ "$reused" = "1" ]; then
+            # Cached archive failed verification — discard and refetch it.
+            echo "${C_WARN}[!] cached archive failed checksum — re-downloading${C_RESET}" >&2
+            rm -f "$cache_ar"
+            curl -fL "$url" -o "$ar" || { rm -rf "$tmp"; echo "${C_ERR}[x] Download failed${C_RESET}" >&2; return 1; }
+            if verify_checksum "$ar" "$checksum" "$LAST_ASSET"; then
+                echo "${C_OK}[*] checksum verified against checksum.txt${C_RESET}" >&2
+            else
+                echo "${C_WARN}[!] checksum mismatch or not listed — continuing but verify manually.${C_RESET}" >&2
+            fi
         else
             echo "${C_WARN}[!] checksum mismatch or not listed — continuing but verify manually.${C_RESET}" >&2
         fi
@@ -132,6 +158,8 @@ fetch_derod() {
     printf '%s\n' "$LAST_TAG" > "$BIN_DIR/derod/.tag"
     date +%s > "$BIN_DIR/derod/.tagtime"
     printf '%s\n' "$LAST_ASSET" > "$BIN_DIR/derod/.asset"
+    # Keep the verified archive so the next install of this tag skips the download.
+    cp -f "$ar" "$cache_ar"
     rm -rf "$tmp"
     echo "${C_OK}[*] derod $LAST_TAG ready: $BIN_DIR/derod/derod${C_RESET}" >&2
 }

@@ -78,7 +78,7 @@ else
     fail "bash runner --version prints '$bash_ver'"
 fi
 bash_help=$(bash ./node.sh --help 2>&1)
-for token in "--integrator-address" "--sync-profile" "--getwork-bind" "--data-dir" "--log-dir" "--rpc-bind" "--p2p-bind" "--prune-history" "--add-priority-node" "--add-exclusive-node" "--socks-proxy" "--clog-level" "--flog-level" "--testnet" "--time-is-in-sync" "--extra-arg" "--config=" "derod only" "snapshot" "restore" "--level" "--max-ratio" "--out" "--keep-running" "--from" "--yes"; do
+for token in "--integrator-address" "--sync-profile" "--getwork-bind" "--data-dir" "--log-dir" "--rpc-bind" "--p2p-bind" "--prune-history" "--add-priority-node" "--add-exclusive-node" "--socks-proxy" "--clog-level" "--flog-level" "--testnet" "--time-is-in-sync" "--extra-arg" "--config=" "--source=" "derod only" "snapshot" "restore" "build" "community-dev" "--level" "--max-ratio" "--out" "--keep-running" "--from" "--yes"; do
     if [[ "$bash_help" != *"$token"* ]]; then fail "help documents '$token'"; else pass "help documents '$token'"; fi
 done
 
@@ -120,28 +120,111 @@ cli_reset; parse_cli_args --extra-arg "--rpc-public" --extra-arg "--tor-port=905
 if [ "${CFG_EXTRA_ARGS[0]}" = "--rpc-public" ] && [ "${CFG_EXTRA_ARGS[1]}" = "--tor-port=9051" ]; then pass "--extra-arg passthrough"; else fail "--extra-arg passthrough"; fi
 cli_reset; parse_cli_args --config /tmp/custom.json
 if [ "$CONFIG_FILE" = "/tmp/custom.json" ]; then pass "--config overrides config path"; else fail "--config (got '$CONFIG_FILE')"; fi
+cli_reset; parse_cli_args --source=dev
+if [ "$UPDATE_SOURCE" = "dev" ]; then pass "--source=dev sets update source"; else fail "--source=dev (got '$UPDATE_SOURCE')"; fi
+cli_reset; parse_cli_args --source release
+if [ "$UPDATE_SOURCE" = "release" ]; then pass "--source release (space)"; else fail "--source release (got '$UPDATE_SOURCE')"; fi
+# null prune_history round-trips to "no prune" (absent keeps the 100000 default)
+NULLCFG="$(mktemp)"
+printf '%s\n' '{"fastsync":true,"prune_history":null}' > "$NULLCFG"
+cli_reset; CONFIG_FILE="$NULLCFG"; load_config
+if [ -z "$CFG_PRUNE_HISTORY" ] && [ "$CFG_FASTSYNC" = "true" ]; then pass "null prune_history means no prune flag"; else fail "null prune_history means no prune flag (prune='$CFG_PRUNE_HISTORY' fast=$CFG_FASTSYNC)"; fi
+printf '%s\n' '{"fastsync":true}' > "$NULLCFG"
+cli_reset; CONFIG_FILE="$NULLCFG"; load_config
+if [ "$CFG_PRUNE_HISTORY" = "100000" ]; then pass "absent prune_history keeps the default"; else fail "absent prune_history keeps the default (got '$CFG_PRUNE_HISTORY')"; fi
+rm -f "$NULLCFG"
+# snapshot dir defaults next to the install (same tree as the derod binary),
+# not to the old ~/Crypto/dero external-node path.
+cli_reset; CFG_SNAPSHOT_DIR=""; resolve_paths
+if [ "$SNAPSHOT_DIR_REAL" = "$INSTALL_DIR/snapshots" ]; then pass "snapshot dir defaults to <install>/snapshots"; else fail "snapshot dir defaults to <install>/snapshots (got '$SNAPSHOT_DIR_REAL')"; fi
+CFG_SNAPSHOT_DIR="/custom/out"; resolve_paths
+if [ "$SNAPSHOT_DIR_REAL" = "/custom/out" ]; then pass "explicit snapshot_dir wins"; else fail "explicit snapshot_dir wins (got '$SNAPSHOT_DIR_REAL')"; fi
 
 # 7. argv builder across sync profiles + testnet + passthrough
 echo ""
 echo "7. derod argv builder:"
 argv_str() { local IFS=' '; echo "${DEROD_ARGV[*]}"; }
-cli_reset; set_sync_profile pruned; resolve_paths; build_derod_argv
+# Chain that already has blocks (topo.map exists): --prune-history applies but
+# --fastsync is bootstrap-only, so it is dropped with a warning.
+PRUNECH="$(mktemp -d)"
+mkdir -p "$PRUNECH/mainnet"
+printf 'x' > "$PRUNECH/mainnet/topo.map"
+cli_reset; set_sync_profile pruned; CFG_DATA_DIR="$PRUNECH"; resolve_paths
+WARN2="$(mktemp)"
+build_derod_argv 2>"$WARN2"
 av=$(argv_str)
-if [[ "$av" == *--fastsync* ]] && [[ "$av" == *--prune-history=100000* ]] && [[ "$av" == *--data-dir=* ]] && [[ "$av" == *--log-dir=* ]] && [[ "$av" == *--rpc-bind=127.0.0.1:10102* ]] && [[ "$av" == *--p2p-bind=0.0.0.0:10101* ]] && [[ "$av" == *--getwork-bind=127.0.0.1:10100* ]]; then
-    pass "pruned argv has fastsync/prune/paths/ports"
+if [[ "$av" != *--fastsync* ]] && [[ "$av" == *--prune-history=100000* ]] && [[ "$av" == *--data-dir=* ]] && [[ "$av" == *--log-dir=* ]] && [[ "$av" == *--rpc-bind=127.0.0.1:10102* ]] && [[ "$av" == *--p2p-bind=0.0.0.0:10101* ]] && [[ "$av" == *--getwork-bind=127.0.0.1:10100* ]] && grep -q 'skipping --fastsync' "$WARN2"; then
+    pass "established chain skips --fastsync but keeps --prune-history/paths/ports"
 else
-    fail "pruned argv ($av)"
+    fail "established chain skips --fastsync (av: $av, warn: $(tr '\n' ' ' < "$WARN2"))"
 fi
+rm -rf "$PRUNECH"; rm -f "$WARN2"
+# Chain already pruned (bltx_store's oldest NON-genesis block is at/above the
+# prune point): --prune-history is dropped too — re-running it would redo the
+# multi-hour prune rewrite on every start. derod names blocks
+# <hash>.block_<diff>_<ver>_<height>, keeps the genesis block (height 0) after
+# pruning, and leaves a rolling window of recent blocks near the tip.
+PRUNEDCH="$(mktemp -d)"
+mkdir -p "$PRUNEDCH/mainnet/bltx_store/f0/27"
+printf 'x' > "$PRUNEDCH/mainnet/topo.map"
+# Genesis block (height 0) + a prune-point block (99980): only genesis sits below
+# the 100000 prune point, so the chain is treated as already pruned.
+printf 'x' > "$PRUNEDCH/mainnet/bltx_store/f0/27/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.block_1_1_0"
+printf 'x' > "$PRUNEDCH/mainnet/bltx_store/f0/27/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.block_100000_1_99980"
+cli_reset; set_sync_profile pruned; CFG_DATA_DIR="$PRUNEDCH"; resolve_paths
+WARN3="$(mktemp)"
+build_derod_argv 2>"$WARN3"
+av=$(argv_str)
+if [[ "$av" != *--prune-history* ]] && grep -q 'already pruned' "$WARN3"; then
+    pass "pruned chain skips --prune-history"
+else
+    fail "pruned chain skips --prune-history (av: $av, warn: $(tr '\n' ' ' < "$WARN3"))"
+fi
+rm -rf "$PRUNEDCH"; rm -f "$WARN3"
+# Chain with old blocks still in bltx_store (never pruned): --prune-history
+# still applies. Genesis (0) plus a real early block (1) below the prune point.
+UNPRUNEDCH="$(mktemp -d)"
+mkdir -p "$UNPRUNEDCH/mainnet/bltx_store/f0/27"
+printf 'x' > "$UNPRUNEDCH/mainnet/topo.map"
+printf 'x' > "$UNPRUNEDCH/mainnet/bltx_store/f0/27/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.block_1_1_0"
+printf 'x' > "$UNPRUNEDCH/mainnet/bltx_store/f0/27/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.block_1_1_1"
+cli_reset; set_sync_profile pruned; CFG_DATA_DIR="$UNPRUNEDCH"; resolve_paths
+WARN4="$(mktemp)"
+build_derod_argv 2>"$WARN4"
+av=$(argv_str)
+if [[ "$av" == *--prune-history=100000* ]] && ! grep -q 'already pruned' "$WARN4"; then
+    pass "unpruned chain keeps --prune-history"
+else
+    fail "unpruned chain keeps --prune-history (av: $av, warn: $(tr '\n' ' ' < "$WARN4"))"
+fi
+rm -rf "$UNPRUNEDCH"; rm -f "$WARN4"
+# Fresh chain (no topo.map): derod can't prune <50 blocks, so --prune-history
+# is deferred — the flag is dropped and a warning is printed.
+FRESHCH="$(mktemp -d)"
+mkdir -p "$FRESHCH/mainnet"
+cli_reset; set_sync_profile pruned; CFG_DATA_DIR="$FRESHCH"; resolve_paths
+WARN="$(mktemp)"
+build_derod_argv 2>"$WARN"
+av=$(argv_str)
+if [[ "$av" == *--fastsync* ]] && [[ "$av" != *--prune-history* ]] && grep -q 'deferring --prune-history' "$WARN"; then
+    pass "fresh chain defers --prune-history"
+else
+    fail "fresh chain defers --prune-history (av: $av, warn: $(tr '\n' ' ' < "$WARN"))"
+fi
+rm -rf "$FRESHCH"; rm -f "$WARN"
 cli_reset; set_sync_profile full; resolve_paths; build_derod_argv
 av=$(argv_str)
 if [[ "$av" != *--fastsync* ]] && [[ "$av" != *--prune-history* ]]; then pass "full argv omits fastsync/prune"; else fail "full argv omits fastsync/prune ($av)"; fi
-cli_reset; set_sync_profile pruned; CFG_TESTNET=true; resolve_paths; apply_testnet_defaults; build_derod_argv
+# Testnet on a fresh chain dir (no topo.map): fastsync applies, prune deferred.
+TNETCH="$(mktemp -d)"
+cli_reset; set_sync_profile pruned; CFG_DATA_DIR="$TNETCH"; CFG_TESTNET=true; resolve_paths; apply_testnet_defaults; build_derod_argv
 av=$(argv_str)
-if [[ "$av" == *--testnet* ]] && [[ "$av" == *--rpc-bind=127.0.0.1:40402* ]] && [[ "$av" == *--p2p-bind=0.0.0.0:40401* ]] && [[ "$av" == *--getwork-bind=127.0.0.1:40400* ]]; then
+if [[ "$av" == *--testnet* ]] && [[ "$av" == *--fastsync* ]] && [[ "$av" != *--prune-history* ]] && [[ "$av" == *--rpc-bind=127.0.0.1:40402* ]] && [[ "$av" == *--p2p-bind=0.0.0.0:40401* ]] && [[ "$av" == *--getwork-bind=127.0.0.1:40400* ]]; then
     pass "testnet argv swaps default ports"
 else
     fail "testnet argv ($av)"
 fi
+rm -rf "$TNETCH"
 cli_reset; set_sync_profile none; CFG_INTEGRATOR_ADDRESS="dero1qy0deadbeef"; CFG_NODE_TAG="my-node"; CFG_MIN_PEERS=8; CFG_MAX_PEERS=64; CFG_CLOG_LEVEL=2; CFG_FLOG_LEVEL=1; CFG_EXTRA_ARGS=("--rpc-public"); resolve_paths; build_derod_argv
 av=$(argv_str)
 if [[ "$av" == *--integrator-address=dero1qy0deadbeef* ]] && [[ "$av" == *--node-tag=my-node* ]] && [[ "$av" == *--min-peers=8* ]] && [[ "$av" == *--max-peers=64* ]] && [[ "$av" == *--clog-level=2* ]] && [[ "$av" == *--flog-level=1* ]] && [[ "$av" == *--rpc-public* ]]; then
@@ -202,22 +285,31 @@ else
 fi
 unset -f resolve_release
 
-# 10. Dry-run is offline (no download, no config, no dirs created)
+# 10. Dry-run is offline (no download, no config, no dirs created). Run from an
+# isolated temp copy of the runner so the test can assert 'no bin/ created'
+# without touching (or deleting!) the real project bin/ — a previous version
+# rm -rf'd $PROJECT_DIR/bin, nuking a user's installed derod on every smoke run.
 echo ""
 echo "10. Dry-run is offline:"
-DRYCFG="$PROJECT_DIR/.dry-test.json"
-rm -f "$DRYCFG"; rm -rf "$PROJECT_DIR/bin" "$PROJECT_DIR/drydata"
-out=$(bash ./node.sh --config="$DRYCFG" --dry-run --sync-profile=pruned \
+DRYTMP="$PROJECT_DIR/.dry-run-test"
+rm -rf "$DRYTMP"; mkdir -p "$DRYTMP"
+cp node.sh catalog.json "$DRYTMP"/
+cp -r lib "$DRYTMP"/
+DRYCFG="$DRYTMP/.dry-test.json"
+out=$(bash "$DRYTMP/node.sh" --config="$DRYCFG" --dry-run --sync-profile=pruned \
     --integrator-address=dero1qyshrhaf0cev402lqw2g2slqf2v3r2rjq2xh03xgd852cjhrgdyqcqq0letdh \
-    --data-dir="$PROJECT_DIR/drydata" --log-dir="$PROJECT_DIR/drylogs" 2>&1)
+    --data-dir="$DRYTMP/drydata" --log-dir="$DRYTMP/drylogs" 2>&1)
 rc=$?
 [ $rc -eq 0 ] && pass "--dry-run exits 0" || fail "--dry-run exits 0 (rc=$rc)"
-echo "$out" | grep -q -- '--prune-history=100000' && pass "pruned profile in argv" || fail "pruned profile in argv"
-echo "$out" | grep -q -- "--data-dir=$PROJECT_DIR/drydata" && pass "data-dir override in argv" || fail "data-dir override in argv"
-[ ! -d "$PROJECT_DIR/bin" ] && pass "no bin/ created" || fail "no bin/ created"
-[ ! -d "$PROJECT_DIR/drydata" ] && pass "no data dir created" || fail "no data dir created"
+# The drydata dir is fresh (no topo.map) so prune is deferred and --fastsync
+# is kept in the argv.
+echo "$out" | grep -q -- '--prune-history=100000' && fail "pruned profile in argv deferred on fresh chain" || pass "pruned profile in argv deferred on fresh chain"
+echo "$out" | grep -q -- '--fastsync' && pass "fresh chain argv keeps --fastsync" || fail "fresh chain argv keeps --fastsync"
+echo "$out" | grep -q -- "--data-dir=$DRYTMP/drydata" && pass "data-dir override in argv" || fail "data-dir override in argv"
+[ ! -d "$DRYTMP/bin" ] && pass "no bin/ created" || fail "no bin/ created"
+[ ! -d "$DRYTMP/drydata" ] && pass "no data dir created" || fail "no data dir created"
 [ ! -f "$DRYCFG" ] && pass "no config file written" || fail "no config file written"
-rm -rf "$PROJECT_DIR/bin" "$PROJECT_DIR/drydata" "$PROJECT_DIR/drylogs"; rm -f "$DRYCFG"
+rm -rf "$DRYTMP"
 
 # 11. Snapshot/restore offline fixture (no network, no real derod)
 echo ""
@@ -226,6 +318,8 @@ source "$LIB_DIR/config.sh"
 source "$LIB_DIR/ui.sh"
 source "$LIB_DIR/rpc.sh"
 source "$LIB_DIR/snapshot.sh"
+# Isolate the offline fixture from any real external install on this machine.
+external_installed() { return 1; }
 SNAPFIX="$(mktemp -d)"
 SNAPCHAIN="$SNAPFIX/chain"
 mkdir -p "$SNAPCHAIN/balances/ab" "$SNAPCHAIN/bltx_store/b1"
@@ -291,9 +385,74 @@ if snapshot_restore >/dev/null 2>&1; then pass "restore runs offline"; else fail
 [ -f "$SNAPREST/balances/ab/x1" ] && [ -f "$SNAPREST/bltx_store/b1/y1" ] && [ -f "$SNAPREST/topo.map" ] && pass "restore reproduces includes" || fail "restore reproduces includes"
 [ ! -e "$SNAPREST/peers.json" ] && [ ! -e "$SNAPREST/config.json" ] && pass "restore omits decoys" || fail "restore omits decoys"
 [ -n "$(ls -d "$SNAPREST".bak-* 2>/dev/null | head -1)" ] && pass "restore keeps .bak" || fail "restore keeps .bak"
+# restore without --from auto-picks the latest snapshot
+SNAPLAT="$(mktemp -d)"
+mkdir -p "$SNAPLAT/balances/ab" "$SNAPLAT/bltx_store/b1"
+printf 'oldblob' > "$SNAPLAT/balances/ab/x1"
+printf 'oldtopo' > "$SNAPLAT/topo.map"
+DATA_DIR_REAL="$SNAPLAT"
+SNAPSHOT_YES=true
+SNAPSHOT_FROM=""
+snapshot_any_derod_running() { return 1; }
+if snapshot_restore >/tmp/snaprest.out 2>&1; then pass "restore without --from auto-picks latest"; else fail "restore without --from auto-picks latest"; fi
+grep -q 'using latest snapshot' /tmp/snaprest.out && pass "restore reports latest snapshot name" || fail "restore reports latest snapshot name"
+[ -f "$SNAPLAT/balances/ab/x1" ] && [ "$(cat "$SNAPLAT/balances/ab/x1")" = "blob" ] && pass "auto-picked archive restores newer content" || fail "auto-picked archive restores newer content"
+# restore with an empty snapshot dir errors clearly
+EMPTYDIR="$(mktemp -d)"
+DATA_DIR_REAL="$EMPTYDIR"
+SNAPSHOT_DIR="$EMPTYDIR/out"
+mkdir -p "$SNAPSHOT_DIR"
+if snapshot_restore >/tmp/snapempty.out 2>&1; then fail "restore with empty snapshot dir refuses"; else pass "restore with empty snapshot dir refuses"; fi
+grep -q 'no snapshot found' /tmp/snapempty.out && pass "empty snapshot dir error is clear" || fail "empty snapshot dir error is clear"
+SNAPSHOT_DIR=""
+rm -rf "$SNAPLAT" "$SNAPLAT".bak-* "$EMPTYDIR" "$EMPTYDIR".bak-*; rm -f /tmp/snaprest.out /tmp/snapempty.out
 if grep -q 'tar --zstd' "$LIB_DIR/snapshot.sh" && grep -q 'rargz --extract' "$LIB_DIR/snapshot.sh"; then pass "restore falls back to tar, rargz optional"; else fail "restore falls back to tar, rargz optional"; fi
-rm -rf "$SNAPFIX" "$SNAPREST" "$SNAPREST".bak-*
-unset -f snapshot_pack snapshot_restore snapshot_chain_dir snapshot_height snapshot_derod_pids snapshot_running_on_data_dir snapshot_any_derod_running snapshot_size_raw snapshot_sha256_hex snapshot_verify_sha256
+# external data-dir resolution (stub unit files)
+EXTUNIT="$(mktemp)"
+printf '[Service]\nWorkingDirectory=/home/priest/Crypto/dero/node\n' > "$EXTUNIT"
+ddir="$(external_data_dir_from_unit "$EXTUNIT")"
+[ "$ddir" = "/home/priest/Crypto/dero/node" ] && pass "external_data_dir_from_unit reads WorkingDirectory" || fail "external_data_dir_from_unit reads WorkingDirectory (got '$ddir')"
+printf '[Service]\nExecStart=/usr/bin/derod --data-dir=/srv/dero/node\n' > "$EXTUNIT"
+ddir="$(external_data_dir_from_unit "$EXTUNIT")"
+[ "$ddir" = "/srv/dero/node" ] && pass "external_data_dir_from_unit falls back to --data-dir" || fail "external_data_dir_from_unit falls back to --data-dir (got '$ddir')"
+rm -f "$EXTUNIT"
+# macOS launchd plist data-dir resolution
+EXTPLIST="$(mktemp)"
+printf '%s' '<?xml version="1.0"?><plist><dict><key>WorkingDirectory</key><string>/Users/priest/Crypto/dero/node</string></dict></plist>' > "$EXTPLIST"
+ddir="$(external_data_dir_from_plist "$EXTPLIST" || true)"
+[ "$ddir" = "/Users/priest/Crypto/dero/node" ] && pass "external_data_dir_from_plist reads WorkingDirectory" || fail "external_data_dir_from_plist reads WorkingDirectory (got '$ddir')"
+printf '%s' '<?xml version="1.0"?><plist><dict><key>ProgramArguments</key><array><string>/usr/bin/derod</string><string>--data-dir=/srv/dero/node</string></array></dict></plist>' > "$EXTPLIST"
+ddir="$(external_data_dir_from_plist "$EXTPLIST" || true)"
+[ "$ddir" = "/srv/dero/node" ] && pass "external_data_dir_from_plist falls back to --data-dir" || fail "external_data_dir_from_plist falls back to --data-dir (got '$ddir')"
+rm -f "$EXTPLIST"
+# external_unit on macOS never treats our own org.deronode.derod agent as external
+if grep -q 'org.deronode.derod' "$LIB_DIR/rpc.sh" && grep -q 'external_unit()' "$LIB_DIR/rpc.sh"; then pass "external_unit excludes our own launchd agent on macOS"; else fail "external_unit excludes our own launchd agent on macOS"; fi
+# cmd_update_external resolves the binary portably (no /proc-only) and restarts launchd on macOS
+if grep -q 'derod_pid' node.sh && grep -q 'process_exe' node.sh && grep -q 'launchctl kickstart' node.sh; then pass "cmd_update_external is portable (derod_pid/process_exe + launchctl)"; else fail "cmd_update_external is portable (derod_pid/process_exe + launchctl)"; fi
+# snapshot_chain_dir resolves the external node's real data dir
+EXTSNAP="$(mktemp -d)"
+mkdir -p "$EXTSNAP/node/mainnet"
+printf 'x' > "$EXTSNAP/node/mainnet/topo.map"
+DATA_DIR_REAL="$SNAPFIX/decoy"
+external_installed() { return 0; }
+external_data_dir() { echo "$EXTSNAP/node"; }
+c="$(snapshot_chain_dir)"
+[ "$c" = "$EXTSNAP/node/mainnet" ] && pass "snapshot_chain_dir resolves external data dir" || fail "snapshot_chain_dir resolves external data dir (got '$c')"
+external_installed() { return 1; }
+c="$(snapshot_chain_dir)"
+[ "$c" = "$DATA_DIR_REAL" ] && pass "snapshot_chain_dir falls back to DATA_DIR_REAL" || fail "snapshot_chain_dir falls back to DATA_DIR_REAL (got '$c')"
+# missing-member pre-check fails clearly (external_installed stays stubbed off)
+INCOMPLETE="$(mktemp -d)"
+mkdir -p "$INCOMPLETE/balances/ab"
+printf 'blob' > "$INCOMPLETE/balances/ab/x1"
+printf 'topomapdata' > "$INCOMPLETE/topo.map"
+DATA_DIR_REAL="$INCOMPLETE"
+ERROUT="$(mktemp)"
+if snapshot_pack 2>"$ERROUT"; then fail "snapshot_pack rejects incomplete chain dir"; else pass "snapshot_pack rejects incomplete chain dir"; fi
+grep -q 'incomplete' "$ERROUT" && grep -q 'bltx_store' "$ERROUT" && pass "missing-member error names the member" || fail "missing-member error names the member (err: $(tr '\n' ' ' < "$ERROUT"))"
+rm -rf "$INCOMPLETE"; rm -f "$ERROUT"
+rm -rf "$SNAPFIX" "$SNAPREST" "$SNAPREST".bak-* "$EXTSNAP"
+unset -f snapshot_pack snapshot_restore snapshot_chain_dir snapshot_height snapshot_derod_pids snapshot_running_on_data_dir snapshot_any_derod_running snapshot_size_raw snapshot_sha256_hex snapshot_verify_sha256 external_data_dir_from_unit external_data_dir_from_plist external_installed external_data_dir
 
 # 12. Live download (only with DERONODE_LIVE=1) — fetches, verifies, never starts.
 # Isolated from the live node: --config points RPC at a dead port so node_running
@@ -351,6 +510,7 @@ parse_rpc_endpoint() { :; }
 get_node_info() { printf '%s\n' '{"version":"3.6.0-152.DEROHE.STARGATE+14082026"}'; }
 resolve_release() { LAST_TAG="Release152"; return 0; }
 cached_tag_fresh() { return 1; }
+is_source_build() { return 1; }   # not a community-dev source build
 node_is_external() { return 1; }
 fetch_derod() { echo "FETCH_DEROD_CALLED" >&2; return 0; }
 service_stop() { echo "SERVICE_STOP_CALLED" >&2; return 0; }
@@ -374,15 +534,189 @@ else
     fail "older running release still updates (out: $out)"
 fi
 rm -rf "$BIN_DIR"
-unset -f daemon_release_number cmd_update node_running parse_rpc_endpoint get_node_info resolve_release cached_tag_fresh node_is_external fetch_derod service_stop service_install cmd_update_external
+unset -f daemon_release_number cmd_update node_running parse_rpc_endpoint get_node_info resolve_release cached_tag_fresh is_source_build node_is_external fetch_derod service_stop service_install cmd_update_external
 
-# 14. Menu option 6 (reconfigure) is dispatched after the menu
+# 13b. Archive cache: an already-downloaded archive is not fetched again
+echo ""
+echo "13b. Archive download cache:"
+source "$LIB_DIR/download.sh"
+FAKEDIR="$(mktemp -d)"
+mkdir -p "$FAKEDIR/x"
+printf '\177ELFfake' > "$FAKEDIR/x/derod"
+FAKE_ASSET="dero_fake_linux_amd64.tar.gz"
+FAKE_ARCHIVE="$FAKEDIR/$FAKE_ASSET"
+tar -czf "$FAKE_ARCHIVE" -C "$FAKEDIR/x" derod
+FAKE_SHA512="$( (sha512sum "$FAKE_ARCHIVE" 2>/dev/null || shasum -a 512 "$FAKE_ARCHIVE") | awk '{print $1}' )"
+CACHEBIN="$(mktemp -d)"
+BIN_DIR="$CACHEBIN"
+LAST_TAG="Release999"
+LAST_ASSET="$FAKE_ASSET"
+C_INFO=''; C_OK=''; C_WARN=''; C_ERR=''; C_RESET=''
+DLCOUNT=0
+stub_curl() {
+    local -a c=("$@")
+    local i u o="" is_cs=0
+    for u in "${c[@]}"; do case "$u" in *checksum.txt*) is_cs=1 ;; esac; done
+    for ((i=0; i<${#c[@]}; i++)); do [ "${c[$i]}" = "-o" ] && { o="${c[$((i+1))]}"; break; }; done
+    if [ "$is_cs" = "1" ]; then
+        printf '%s  %s\n' "$FAKE_SHA512" "$FAKE_ASSET" > "$o"
+    else
+        cp "$FAKE_ARCHIVE" "$o"; DLCOUNT=$((DLCOUNT+1))
+    fi
+    return 0
+}
+curl() { stub_curl "$@"; }
+if fetch_derod 2>/dev/null; then
+    [ "$DLCOUNT" = "1" ] && pass "first fetch downloads the archive" || fail "first fetch downloads the archive (count=$DLCOUNT)"
+    [ -f "$BIN_DIR/archives/$LAST_TAG/$FAKE_ASSET" ] && pass "archive cached under bin/archives/<tag>" || fail "archive cached under bin/archives/<tag>"
+else
+    fail "first fetch downloads the archive"
+fi
+# Wipe the installed binary (forces a reinstall) — the cached archive is reused.
+# Note: fetch_derod runs in the current shell (not $( )) so DLCOUNT persists.
+CACHEOUT="$(mktemp)"
+rm -f "$BIN_DIR/derod/derod" "$BIN_DIR/derod/.tag" "$BIN_DIR/derod/.tagtime" "$BIN_DIR/derod/.asset"
+fetch_derod 2>"$CACHEOUT"
+out="$(cat "$CACHEOUT")"
+if [ "$DLCOUNT" = "1" ] && echo "$out" | grep -q "Reusing cached"; then
+    pass "reinstall reuses cached archive (no re-download)"
+else
+    fail "reinstall reuses cached archive (count=$DLCOUNT out: $(tr '\n' ' ' <<<"$out"))"
+fi
+# A corrupt cached archive fails checksum and is re-downloaded.
+printf 'garbage' > "$BIN_DIR/archives/$LAST_TAG/$FAKE_ASSET"
+rm -f "$BIN_DIR/derod/derod" "$BIN_DIR/derod/.tag" "$BIN_DIR/derod/.tagtime" "$BIN_DIR/derod/.asset"
+fetch_derod 2>"$CACHEOUT"
+out="$(cat "$CACHEOUT")"
+if [ "$DLCOUNT" = "2" ] && echo "$out" | grep -q "cached archive failed checksum"; then
+    pass "corrupt cached archive is re-downloaded"
+else
+    fail "corrupt cached archive is re-downloaded (count=$DLCOUNT out: $(tr '\n' ' ' <<<"$out"))"
+fi
+rm -rf "$FAKEDIR" "$CACHEBIN"; rm -f "$CACHEOUT"
+unset -f fetch_derod resolve_release verify_checksum find_derod_in cached_tag_fresh stub_curl curl
+
+# 14. Menu option 7 (reconfigure) is dispatched after the menu
 echo ""
 echo "14. Menu reconfigure dispatch:"
 menu_src="$(sed -n '/^menu()/,/^}/p' node.sh)"
-echo "$menu_src" | grep -q '6) ACTION=reconfigure' && pass "menu option 6 sets ACTION=reconfigure" || fail "menu option 6 sets ACTION=reconfigure"
+echo "$menu_src" | grep -q '7) ACTION=reconfigure' && pass "menu option 7 sets ACTION=reconfigure" || fail "menu option 7 sets ACTION=reconfigure"
 entry_src="$(sed -n '/^case "\$ACTION" in/,$p' node.sh)"
 echo "$entry_src" | grep -q 'reconfigure) cmd_reconfigure ;;' && pass "post-menu case dispatches reconfigure" || fail "post-menu case dispatches reconfigure"
+# first-run install (menu option 1 with no derod) continues straight into start
+first_run="$(sed -n '/^menu()/,/^}/p' node.sh)"
+if echo "$first_run" | grep -q 'No derod installed yet' && echo "$first_run" | grep -q 'ensure_binary; then' && echo "$first_run" | grep -q 'ACTION=start'; then
+    pass "first-run install continues straight into start"
+else
+    fail "first-run install continues straight into start"
+fi
+# first-run install honors the configure run-mode answer (service vs foreground)
+cfg_src="$(sed -n '/^configure()/,/^}/p' node.sh)"
+if echo "$cfg_src" | grep -q 'Background system service' && echo "$cfg_src" | grep -q 'AS_SERVICE=true' && echo "$cfg_src" | grep -q 'ask pick "Choose" "2"'; then
+    pass "configure offers system-service install (run mode question)"
+else
+    fail "configure offers system-service install (run mode question)"
+fi
+# The first-run branch (before the menu's while loop) sets ACTION=start and
+# never touches AS_SERVICE, so the configure answer survives into cmd_start.
+first_run_branch="$(echo "$first_run" | sed -n '1,/while true/p')"
+if echo "$first_run_branch" | grep -q 'ACTION=start' && ! echo "$first_run_branch" | grep -q 'AS_SERVICE'; then
+    pass "first-run install keeps configure's service/foreground choice"
+else
+    fail "first-run install keeps configure's service/foreground choice"
+fi
+# reconfigure also continues straight into start (only when nothing is running)
+reconf="$(sed -n '/^cmd_reconfigure()/,/^}/p' node.sh)"
+if echo "$reconf" | grep -q 'cmd_start' && echo "$reconf" | grep -q 'node_running; then'; then
+    pass "reconfigure continues into start when stopped"
+else
+    fail "reconfigure continues into start when stopped"
+fi
+# resync command: parse, menu, dispatch, wipe+fastsync+start
+if grep -q 'resync) ACTION="resync"' node.sh && grep -q '11) ACTION=resync' node.sh && grep -qE 'resync\) +cmd_resync ;;' node.sh; then
+    pass "resync wired into parse/menu/dispatch"
+else
+    fail "resync wired into parse/menu/dispatch"
+fi
+# build command (compile community-dev source): parse, menu, dispatch
+if grep -q 'build) ACTION="build"' node.sh && grep -q '6) ACTION=build' node.sh && grep -qE 'build\) +cmd_build ;;' node.sh; then
+    pass "build wired into parse/menu/dispatch"
+else
+    fail "build wired into parse/menu/dispatch"
+fi
+build_src="$(sed -n '/^cmd_build()/,/^}/p' node.sh)"
+if echo "$build_src" | grep -q 'build_derod_from_source' && echo "$build_src" | grep -q 'service_stop' && echo "$build_src" | grep -q 'service_install' && echo "$build_src" | grep -q 'external_installed'; then
+    pass "cmd_build stops+runs+builds+restarts, refuses external"
+else
+    fail "cmd_build stops+runs+builds+restarts, refuses external"
+fi
+if echo "$build_src" | grep -q 'have_go' && echo "$build_src" | grep -q 'Go toolchain not found'; then
+    pass "cmd_build guards on the Go toolchain"
+else
+    fail "cmd_build guards on the Go toolchain"
+fi
+# build lib: clone community-dev, go build ./cmd/derod, magic-check, marker
+bld="$(cat "$LIB_DIR/build.sh")"
+if echo "$bld" | grep -q 'git clone --depth 1 --branch "$DEV_BRANCH"' && echo "$bld" | grep -q 'go build -o derod ./cmd/derod' && echo "$bld" | grep -q 'community-dev@' && echo "$bld" | grep -q 'is_source_build'; then
+    pass "lib/build.sh clones community-dev + go builds derod + marks source"
+else
+    fail "lib/build.sh clones community-dev + go builds derod + marks source"
+fi
+if echo "$bld" | grep -q 'find_derod_in' && echo "$bld" | grep -q 'magic check'; then
+    pass "lib/build.sh reuses find_derod_in + magic check"
+else
+    fail "lib/build.sh reuses find_derod_in + magic check"
+fi
+# source builds are kept by start (cached_tag_fresh) but replaced by update
+if grep -q 'is_source_build && return 0' "$LIB_DIR/download.sh" && grep -q '! is_source_build && cached_tag_fresh' node.sh; then
+    pass "start keeps source build; update swaps back to release"
+else
+    fail "start keeps source build; update swaps back to release"
+fi
+# update --source=dev routes through the community-dev compile path; menu
+# option 5 offers the release-vs-community-dev choice.
+if grep -q '"\${UPDATE_SOURCE:-release}" = "dev"' node.sh && grep -q 'cmd_build' node.sh && grep -q 'Update source:' node.sh && grep -q '2) community-dev source (compile)' node.sh; then
+    pass "update --source=dev routes to cmd_build (menu option 5 offers the choice)"
+else
+    fail "update --source=dev routes to cmd_build (menu option 5 offers the choice)"
+fi
+upd_src="$(sed -n '/^cmd_update()/,/^}/p' node.sh)"
+if echo "$upd_src" | grep -q 'UPDATE_SOURCE' && echo "$upd_src" | grep -q 'cmd_build'; then
+    pass "cmd_update dispatches dev source to the build path"
+else
+    fail "cmd_update dispatches dev source to the build path"
+fi
+# menu-driven entry loops back to the menu after each action (no exit)
+if echo "$entry_src" | grep -q 'while true; do' && echo "$entry_src" | grep -q 'MENU_MODE=true'; then
+    pass "menu-driven entry loops back to the menu"
+else
+    fail "menu-driven entry loops back to the menu"
+fi
+# cmd_start runs foreground derod as a child (no exec) so the menu returns
+start_src="$(sed -n '/^cmd_start()/,/^}/p' node.sh)"
+if echo "$start_src" | grep -q 'MENU_MODE' && echo "$start_src" | grep -q 'exec "\$BINARY_PATH"'; then
+    pass "cmd_start keeps exec only for CLI (menu mode returns to menu)"
+else
+    fail "cmd_start keeps exec only for CLI (menu mode returns to menu)"
+fi
+resync_body="$(sed -n '/^cmd_resync()/,/^}/p' node.sh)"
+if echo "$resync_body" | grep -q 'snapshot_chain_dir' && echo "$resync_body" | grep -q 'rm -rf' && echo "$resync_body" | grep -q 'CFG_FASTSYNC=true' && echo "$resync_body" | grep -q 'CFG_PRUNE_HISTORY=""' && echo "$resync_body" | grep -q 'cmd_start'; then
+    pass "resync wipes chain then fastsync-bootstraps and starts"
+else
+    fail "resync wipes chain then fastsync-bootstraps and starts"
+fi
+# logs command: parse, menu, dispatch, tail selection
+if grep -q 'logs) ACTION="logs"' node.sh && grep -q '12) ACTION=logs' node.sh && grep -q 'logs).*cmd_logs ;;' node.sh; then
+    pass "logs wired into parse/menu/dispatch"
+else
+    fail "logs wired into parse/menu/dispatch"
+fi
+logs_src="$(sed -n '/^cmd_logs()/,/^}/p' node.sh)"
+if echo "$logs_src" | grep -q 'tail -n 100 -f' && echo "$logs_src" | grep -q 'derod.out.log' && echo "$logs_src" | grep -q 'MENU_MODE'; then
+    pass "cmd_logs tails derod.log and falls back to out/err captures"
+else
+    fail "cmd_logs tails derod.log and falls back to out/err captures"
+fi
 
 # 15. Snapshot prompts to stop a running node (stub-extracted from node.sh)
 echo ""

@@ -37,6 +37,7 @@ $PSNativeCommandUseErrorActionPreference = $false
 # $IsWindows exists on PowerShell 7; Windows PowerShell 5.1 is Windows-only and
 # leaves it undefined, so fall back to the OS env var there.
 $IsWin = if ($IsWindows) { $true } elseif ($env:OS -eq 'Windows_NT') { $true } else { $false }
+$IsMac = if ($IsMacOS) { $true } elseif (-not $IsWin -and [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::MacOSX) { $true } else { $false }
 
 function Test-IsOnPath {
     param([string]$Dir)
@@ -244,7 +245,7 @@ if (-not $NoPathEdit) {
         switch ($shellName) {
             'fish' { $cfgHome = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }; $rc = Join-Path $cfgHome 'fish/config.fish' }
             'zsh'  { $rc = Join-Path $HOME '.zshrc'; if (-not (Test-Path $rc)) { $rc = Join-Path $HOME '.zshenv' } }
-            'bash' { $rc = Join-Path $HOME '.bashrc'; if ($IsMacOS) { $rc = Join-Path $HOME '.bash_profile' } }
+            'bash' { $rc = Join-Path $HOME '.bashrc'; if ($IsMac) { $rc = Join-Path $HOME '.bash_profile' } }
         }
         $marked = $rc -and (Test-Path $rc) -and [bool](Select-String -Path $rc -Pattern '# deronode' -Quiet -ErrorAction SilentlyContinue)
         if ($rc -and -not $marked) {

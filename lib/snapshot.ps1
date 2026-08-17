@@ -6,9 +6,14 @@ $script:SnapshotInclude = @('balances', 'bltx_store', 'topo.map')
 $script:SnapshotExclude = @('peers.json', 'trusted_peers.json', 'ban_list.json', 'config.json', 'config_pool.json')
 
 function Get-SnapshotChainDir {
-    $mn = Join-Path $script:DataDirReal 'mainnet'
+    $base = $script:DataDirReal
+    if (Test-ExternalInstalled) {
+        $ext = Get-ExternalDataDir
+        if ($ext) { $base = $ext }
+    }
+    $mn = Join-Path $base 'mainnet'
     if (Test-Path (Join-Path $mn 'topo.map')) { return $mn }
-    return $script:DataDirReal
+    return $base
 }
 
 function Get-SnapshotHeight {
@@ -19,19 +24,20 @@ function Get-SnapshotHeight {
     return ''
 }
 
-# Portable process table: pid / name / commandline. Windows uses CIM; other
+# Portable process table: pid / name / commandline / executable path. Windows
+# uses CIM (ExecutablePath powers external-node detection + update); other
 # platforms parse `ps -eo pid=,comm=,args=` (comm = executable name, so a
 # "deronode" path never matches a derod executable).
 function Get-ProcessTable {
-    if ($IsWindows) {
+    if ($script:IsWindows) {
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            ForEach-Object { [pscustomobject]@{ Pid = $_.ProcessId; Name = $_.Name; CommandLine = $_.CommandLine } }
+            ForEach-Object { [pscustomobject]@{ Pid = $_.ProcessId; Name = $_.Name; CommandLine = $_.CommandLine; ExecutablePath = $_.ExecutablePath } }
     } else {
         $rows = & ps -eo pid=,comm=,args= 2>$null
         foreach ($row in $rows) {
             $t = [regex]::Match([string]$row, '^\s*(\d+)\s+(\S+)\s+(.*)$')
             if ($t.Success) {
-                [pscustomobject]@{ Pid = [int]$t.Groups[1].Value; Name = $t.Groups[2].Value; CommandLine = $t.Groups[3].Value }
+                [pscustomobject]@{ Pid = [int]$t.Groups[1].Value; Name = $t.Groups[2].Value; CommandLine = $t.Groups[3].Value; ExecutablePath = $null }
             }
         }
     }
@@ -61,7 +67,7 @@ function Test-AnyDerodRunning {
 
 function Get-SnapshotRawBytes {
     $dir = Get-SnapshotChainDir
-    if (-not $IsWindows) {
+    if (-not $script:IsWindows) {
         $total = 0L
         foreach ($item in $script:SnapshotInclude) {
             $p = Join-Path $dir $item
@@ -123,6 +129,11 @@ function New-Snapshot {
         Write-Host "[x] chain data not found at $chainDir (nothing to snapshot)" -ForegroundColor Red
         return $false
     }
+    $missing = @($script:SnapshotInclude | Where-Object { -not (Test-Path (Join-Path $chainDir $_)) })
+    if ($missing.Count -gt 0) {
+        Write-Host "[x] chain dir incomplete at $chainDir - missing: $($missing -join ' ')" -ForegroundColor Red
+        return $false
+    }
     if ((Test-SnapshotRunningOnDataDir) -and -not $script:SnapshotKeepRunning) {
         Write-Host "[x] derod is running on $($script:DataDirReal) - stop it (deronode stop) or pass --keep-running for a live snapshot." -ForegroundColor Red
         return $false
@@ -144,9 +155,19 @@ function New-Snapshot {
         return $true
     }
 
-    if (-not (Get-Command tar -ErrorAction SilentlyContinue) -or
-        -not (Get-Command zstd -ErrorAction SilentlyContinue)) {
-        Write-Host '[x] snapshot needs GNU tar and zstd' -ForegroundColor Red
+    if (-not (Get-Command tar -ErrorAction SilentlyContinue)) {
+        Write-Host '[x] snapshot needs tar' -ForegroundColor Red
+        return $false
+    }
+    # zstd CLI (brew install zstd / winget install zstandard) is preferred;
+    # GNU tar --zstd and modern bsdtar (macOS, Win10+) work without it.
+    $haveZstd = [bool](Get-Command zstd -ErrorAction SilentlyContinue)
+    $haveTarZstd = $false
+    try {
+        $haveTarZstd = [bool]((& tar --help 2>&1 | Select-String -Pattern '--zstd' -Quiet))
+    } catch { $haveTarZstd = $false }
+    if (-not $haveZstd -and -not $haveTarZstd) {
+        Write-Host '[x] snapshot needs the zstd CLI (brew install zstd / winget install zstandard) or a tar with --zstd support' -ForegroundColor Red
         return $false
     }
 
@@ -160,25 +181,43 @@ function New-Snapshot {
     foreach ($e in $script:SnapshotExclude) { $excArgs += "--exclude=$e" }
     $errFile = Join-Path $outDir '.snap-tar.err'
     try {
-        if ($IsWindows) {
-            $incStr = ($script:SnapshotInclude | ForEach-Object { '"{0}"' -f $_ }) -join ' '
-            $excStr = ($excArgs | ForEach-Object { '"{0}"' -f $_ }) -join ' '
-            $c = "cd /d ""$chainDir"" && tar $excStr -cf - $incStr | zstd -T0 -q -$level --long=27 -o ""$tmpOut"""
-            & cmd.exe /d /c $c
-            if ($LASTEXITCODE -ne 0) { throw 'tar/zstd failed' }
+        if ($haveZstd) {
+            if ($script:IsWindows) {
+                $incStr = ($script:SnapshotInclude | ForEach-Object { '"{0}"' -f $_ }) -join ' '
+                $excStr = ($excArgs | ForEach-Object { '"{0}"' -f $_ }) -join ' '
+                $c = "cd /d ""$chainDir"" && tar $excStr -cf - $incStr | zstd -T0 -q -$level --long=27 -o ""$tmpOut"""
+                & cmd.exe /d /c $c
+                if ($LASTEXITCODE -ne 0) { throw 'tar/zstd failed' }
+            } else {
+                & tar @excArgs -C $chainDir -cf - @($script:SnapshotInclude) 2>$errFile |
+                    & zstd -T0 -q -$level --long=27 -o "$tmpOut"
+            }
         } else {
-            & tar @excArgs -C $chainDir -cf - @($script:SnapshotInclude) 2>$errFile |
-                & zstd -T0 -q -$level --long=27 -o "$tmpOut"
+            # No zstd CLI — GNU tar --zstd / bsdtar handles compression itself.
+            if ($script:IsWindows) {
+                $incStr = ($script:SnapshotInclude | ForEach-Object { '"{0}"' -f $_ }) -join ' '
+                $excStr = ($excArgs | ForEach-Object { '"{0}"' -f $_ }) -join ' '
+                $c = "cd /d ""$chainDir"" && tar --zstd $excStr -cf ""$tmpOut"" $incStr"
+                & cmd.exe /d /c $c
+                if ($LASTEXITCODE -ne 0) { throw 'tar --zstd failed' }
+            } else {
+                & tar --zstd @excArgs -C $chainDir -cf "$tmpOut" @($script:SnapshotInclude) 2>$errFile
+                if ($LASTEXITCODE -ne 0) { throw 'tar --zstd failed' }
+            }
         }
         $terr = ''
         if (Test-Path $errFile) {
             $raw = Get-Content $errFile -Raw
             if ($raw) { $terr = $raw.Trim() }
         }
-        if ($LASTEXITCODE -ne 0 -or $terr) { throw 'tar/zstd failed' }
+        if ($LASTEXITCODE -ne 0 -or $terr) {
+            throw ($terr | Select-Object -First 1)
+        }
     } catch {
+        $emsg = $_.Exception.Message
+        if (-not $emsg) { $emsg = 'snapshot failed' }
         Remove-Item $tmpOut, $errFile -Force -ErrorAction SilentlyContinue
-        Write-Host '[x] snapshot failed' -ForegroundColor Red
+        Write-Host "[x] $emsg" -ForegroundColor Red
         return $false
     }
     Remove-Item $errFile -Force -ErrorAction SilentlyContinue
@@ -212,9 +251,28 @@ function New-Snapshot {
     return $true
 }
 
+# Newest dero-mainnet-*.tar.zst in the snapshot dir, by last-write time (newest
+# name as a tie-break/fallback). Returns the path or $null when none exists.
+function Get-LatestSnapshotArchive {
+    $dir = if ($script:SnapshotDir) { $script:SnapshotDir } else { $script:SnapshotDirReal }
+    if (-not (Test-Path $dir)) { return $null }
+    $archives = Get-ChildItem (Join-Path $dir 'dero-mainnet-*.tar.zst') -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending
+    if (-not $archives) { return $null }
+    return $archives[0].FullName
+}
+
 function Restore-Snapshot {
     $archive = $script:SnapshotFrom
-    if (-not $archive) { Write-Host '[x] restore needs --from=<archive>' -ForegroundColor Red; return $false }
+    if (-not $archive) {
+        $archive = Get-LatestSnapshotArchive
+        if (-not $archive) {
+            $dir = if ($script:SnapshotDir) { $script:SnapshotDir } else { $script:SnapshotDirReal }
+            Write-Host "[x] no snapshot found in $dir - pass --from=<archive>" -ForegroundColor Red
+            return $false
+        }
+        Write-Host "[*] using latest snapshot: $(Split-Path -Leaf $archive)" -ForegroundColor DarkCyan
+    }
     if (-not (Test-Path $archive)) { Write-Host "[x] archive not found: $archive" -ForegroundColor Red; return $false }
     $chainDir = Get-SnapshotChainDir
 

@@ -52,7 +52,7 @@ Write-Host '5. CLI basics:'
 $ver = (& ./node.ps1 --version 6>&1 2>&1 | Select-Object -First 1)
 if ($ver -match '^deronode \d+\.\d+\.\d+$') { Pass "--version prints '$ver'" } else { Fail "--version prints '$ver'" }
 $help = (& ./node.ps1 --help 2>&1 | Out-String)
-foreach ($token in @('--integrator-address','--sync-profile','--getwork-bind','--data-dir','--log-dir','--rpc-bind','--p2p-bind','--prune-history','--add-priority-node','--socks-proxy','--testnet','--extra-arg','--config=','snapshot','restore','--level','--max-ratio','--out','--keep-running','--from','--yes')) {
+foreach ($token in @('--integrator-address','--sync-profile','--getwork-bind','--data-dir','--log-dir','--rpc-bind','--p2p-bind','--prune-history','--add-priority-node','--socks-proxy','--testnet','--extra-arg','--config=','--source=','snapshot','restore','build','community-dev','--level','--max-ratio','--out','--keep-running','--from','--yes')) {
     if ($help -match [regex]::Escape($token)) { Pass "help documents '$token'" } else { Fail "help documents '$token'" }
 }
 
@@ -65,16 +65,68 @@ $script:InstallDir = $ProjectDir
 $script:ConfigFile = Join-Path $ProjectDir 'config.json'
 $script:Platform = Get-PwshPlatform
 Import-Config
+# Chain that already has blocks (topo.map exists): --prune-history applies but
+# --fastsync is bootstrap-only, so it is dropped with a warning.
+$argvFix = Join-Path $ProjectDir '.argv-fixture'
+Remove-Item -Path $argvFix -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path (Join-Path $argvFix 'mainnet') -Force | Out-Null
+Set-Content (Join-Path $argvFix 'mainnet/topo.map') 'x' -NoNewline
 Set-SyncProfile 'pruned'
+$script:CFG.data_dir = $argvFix
 Resolve-Paths
 $av = Build-DerodArgv
 $s = $av -join ' '
-if ($s -match '--fastsync' -and $s -match '--prune-history=100000' -and $s -match '--rpc-bind=127\.0\.0\.1:10102') { Pass 'pruned argv has fastsync/prune/rpc' } else { Fail "pruned argv ($s)" }
+if ($s -notmatch '--fastsync' -and $s -match '--prune-history=100000' -and $s -match '--rpc-bind=127\.0\.0\.1:10102') { Pass 'established chain skips --fastsync but keeps --prune-history/rpc' } else { Fail "established chain skips --fastsync ($s)" }
+# Chain already pruned (bltx_store's oldest NON-genesis block is at/above the
+# prune point): --prune-history is dropped too — re-running it would redo the
+# multi-hour prune rewrite on every start. derod names blocks
+# <hash>.block_<diff>_<ver>_<height>, keeps the genesis block (height 0) after
+# pruning, and leaves a rolling window of recent blocks near the tip.
+$argvPruned = Join-Path $ProjectDir '.argv-pruned'
+Remove-Item -Path $argvPruned -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path (Join-Path $argvPruned 'mainnet/bltx_store/f0/27') -Force | Out-Null
+Set-Content (Join-Path $argvPruned 'mainnet/topo.map') 'x' -NoNewline
+# Genesis block (height 0) + a prune-point block (99980): only genesis sits below
+# the 100000 prune point, so the chain is treated as already pruned.
+Set-Content (Join-Path $argvPruned 'mainnet/bltx_store/f0/27/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.block_1_1_0') 'x' -NoNewline
+Set-Content (Join-Path $argvPruned 'mainnet/bltx_store/f0/27/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.block_100000_1_99980') 'x' -NoNewline
+$script:CFG.data_dir = $argvPruned
+Resolve-Paths
+$s = (Build-DerodArgv) -join ' '
+if ($s -notmatch '--prune-history') { Pass 'pruned chain skips --prune-history' } else { Fail "pruned chain skips --prune-history ($s)" }
+# Chain with old blocks still in bltx_store (never pruned): --prune-history
+# still applies. Genesis (0) plus a real early block (1) below the prune point.
+$argvUnpruned = Join-Path $ProjectDir '.argv-unpruned'
+Remove-Item -Path $argvUnpruned -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path (Join-Path $argvUnpruned 'mainnet/bltx_store/f0/27') -Force | Out-Null
+Set-Content (Join-Path $argvUnpruned 'mainnet/topo.map') 'x' -NoNewline
+Set-Content (Join-Path $argvUnpruned 'mainnet/bltx_store/f0/27/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.block_1_1_0') 'x' -NoNewline
+Set-Content (Join-Path $argvUnpruned 'mainnet/bltx_store/f0/27/dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.block_1_1_1') 'x' -NoNewline
+$script:CFG.data_dir = $argvUnpruned
+Resolve-Paths
+$s = (Build-DerodArgv) -join ' '
+if ($s -match '--prune-history=100000') { Pass 'unpruned chain keeps --prune-history' } else { Fail "unpruned chain keeps --prune-history ($s)" }
+Remove-Item -Path $argvPruned, $argvUnpruned -Recurse -Force -ErrorAction SilentlyContinue
+# Fresh chain (no topo.map): derod can't prune <50 blocks, so --prune-history
+# is deferred — the flag is dropped and a warning is printed.
+$argvFresh = Join-Path $ProjectDir '.argv-fresh'
+Remove-Item -Path $argvFresh -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path (Join-Path $argvFresh 'mainnet') -Force | Out-Null
+$script:CFG.data_dir = $argvFresh
+Resolve-Paths
+$s = (Build-DerodArgv) -join ' '
+if ($s -match '--fastsync' -and $s -notmatch '--prune-history') { Pass 'fresh chain defers --prune-history' } else { Fail "fresh chain defers --prune-history ($s)" }
+Remove-Item -Path $argvFix, $argvFresh -Recurse -Force -ErrorAction SilentlyContinue
 Set-SyncProfile 'full'
 Resolve-Paths
 $s = (Build-DerodArgv) -join ' '
 if ($s -notmatch '--fastsync' -and $s -notmatch '--prune-history') { Pass 'full argv omits fastsync/prune' } else { Fail "full argv omits fastsync/prune ($s)" }
 Set-SyncProfile 'pruned'
+# Reset binds to the mainnet defaults so the swap test is independent of the
+# user's real config.json (e.g. an off-host getwork bind must not block it).
+$script:CFG.rpc_bind = '127.0.0.1:10102'
+$script:CFG.p2p_bind = '0.0.0.0:10101'
+$script:CFG.getwork_bind = '127.0.0.1:10100'
 $script:CFG.testnet = $true
 Resolve-Paths
 Apply-TestnetDefaults
@@ -84,6 +136,30 @@ $script:CFG.testnet = $false
 $script:CFG.extra_args = @('--rpc-public')
 $s = (Build-DerodArgv) -join ' '
 if ($s -match '--rpc-public') { Pass 'extra_args passthrough' } else { Fail 'extra_args passthrough' }
+# null prune_history round-trips to "no prune" (absent keeps the 100000 default)
+$nullCfg = Join-Path $ProjectDir '.null-prune.json'
+Set-Content $nullCfg '{"fastsync":true,"prune_history":null}' -NoNewline
+$script:ConfigFile = $nullCfg
+Import-Config
+if ($null -eq $script:CFG.prune_history -and $script:CFG.fastsync) { Pass 'null prune_history means no prune flag' } else { Fail "null prune_history means no prune flag (got '$($script:CFG.prune_history)')" }
+# Absent key keeps the in-memory default (fresh state = 100000).
+$script:CFG.prune_history = 100000
+Set-Content $nullCfg '{"fastsync":true}' -NoNewline
+Import-Config
+if ($script:CFG.prune_history -eq 100000) { Pass 'absent prune_history keeps the default' } else { Fail "absent prune_history keeps the default (got '$($script:CFG.prune_history)')" }
+Remove-Item $nullCfg -Force -ErrorAction SilentlyContinue
+$script:ConfigFile = Join-Path $ProjectDir 'config.json'
+Import-Config
+# snapshot dir defaults next to the install (same tree as the derod binary),
+# not to the old ~/Crypto/dero external-node path.
+$script:CFG.snapshot_dir = ''
+Resolve-Paths
+if ($script:SnapshotDirReal -eq (Join-Path $ProjectDir 'snapshots')) { Pass 'snapshot dir defaults to <install>/snapshots' } else { Fail "snapshot dir defaults to <install>/snapshots (got '$($script:SnapshotDirReal)')" }
+$script:CFG.snapshot_dir = '/custom/out'
+Resolve-Paths
+if ($script:SnapshotDirReal -eq '/custom/out') { Pass 'explicit snapshot_dir wins' } else { Fail "explicit snapshot_dir wins (got '$($script:SnapshotDirReal)')" }
+$script:CFG.snapshot_dir = ''
+Resolve-Paths
 
 # 7. Dry-run is offline (no download, no config, no dirs created)
 Write-Host ''
@@ -107,6 +183,8 @@ Write-Host ''
 Write-Host '6c. Snapshot/restore offline fixture:'
 . (Join-Path $ProjectDir 'lib/rpc.ps1')
 . (Join-Path $ProjectDir 'lib/snapshot.ps1')
+# Isolate the offline fixture from any real external install on this machine.
+function Test-ExternalInstalled { return $false }
 $script:InstallDir = $ProjectDir
 $snapFix = Join-Path $ProjectDir '.snap-fixture'
 Remove-Item -Path $snapFix -Recurse -Force -ErrorAction SilentlyContinue
@@ -168,23 +246,111 @@ if (Restore-Snapshot) { Pass 'restore runs offline' } else { Fail 'restore runs 
 if ((Test-Path (Join-Path $snapRest 'balances/ab/x1')) -and (Test-Path (Join-Path $snapRest 'bltx_store/b1/y1')) -and (Test-Path (Join-Path $snapRest 'topo.map'))) { Pass 'restore reproduces includes' } else { Fail 'restore reproduces includes' }
 if (-not (Test-Path (Join-Path $snapRest 'peers.json')) -and -not (Test-Path (Join-Path $snapRest 'config.json'))) { Pass 'restore omits decoys' } else { Fail 'restore omits decoys' }
 if (Get-ChildItem "$snapRest.bak-*" -ErrorAction SilentlyContinue) { Pass 'restore keeps .bak' } else { Fail 'restore keeps .bak' }
+# restore without --from auto-picks the latest snapshot
+$snapLat = Join-Path $snapFix 'lat'
+New-Item -ItemType Directory -Path (Join-Path $snapLat 'balances/ab'), (Join-Path $snapLat 'bltx_store/b1') -Force | Out-Null
+Set-Content (Join-Path $snapLat 'balances/ab/x1') 'oldblob' -NoNewline
+Set-Content (Join-Path $snapLat 'topo.map') 'oldtopo' -NoNewline
+$script:DataDirReal = $snapLat
+$script:SnapshotYes = $true
+$script:SnapshotFrom = ''
+function Test-AnyDerodRunning { return $false }
+$restOut = ''
+try {
+    $okRest = Restore-Snapshot
+    if ($okRest) { Pass 'restore without --from auto-picks latest' } else { Fail 'restore without --from auto-picks latest' }
+} catch { Fail "restore without --from auto-picks latest (threw: $($_.Exception.Message))" }
+$script:DataDirReal = $snapLat
+$latBlob = (Get-Content (Join-Path $snapLat 'balances/ab/x1') -Raw)
+if ($latBlob -eq 'blob') { Pass 'auto-picked archive restores newer content' } else { Fail "auto-picked archive restores newer content (got '$latBlob')" }
+# restore with an empty snapshot dir errors clearly
+$emptyFix = Join-Path $snapFix 'empty'
+New-Item -ItemType Directory -Path (Join-Path $emptyFix 'out') -Force | Out-Null
+$script:SnapshotDir = (Join-Path $emptyFix 'out')
+$script:SnapshotFrom = ''
+try {
+    $okEmpty = Restore-Snapshot
+    if ($okEmpty) { Fail 'restore with empty snapshot dir refuses' } else { Pass 'restore with empty snapshot dir refuses' }
+} catch { Fail "restore with empty snapshot dir refuses (threw: $($_.Exception.Message))" }
+$script:SnapshotDir = $null
 $snapPs = Get-Content (Join-Path $ProjectDir 'lib/snapshot.ps1') -Raw
 if ($snapPs -match 'tar --zstd' -and $snapPs -match 'rargz --extract') { Pass 'restore falls back to tar, rargz optional' } else { Fail 'restore falls back to tar, rargz optional' }
+# external data-dir resolution (stub unit files)
+$unitFile = Join-Path $snapFix 'derod.service'
+Set-Content $unitFile "[Service]`nWorkingDirectory=/home/priest/Crypto/dero/node" -NoNewline
+$dd = Get-DataDirFromUnitFile $unitFile
+if ($dd -eq '/home/priest/Crypto/dero/node') { Pass 'Get-DataDirFromUnitFile reads WorkingDirectory' } else { Fail "Get-DataDirFromUnitFile reads WorkingDirectory (got '$dd')" }
+Set-Content $unitFile "[Service]`nExecStart=/usr/bin/derod --data-dir=/srv/dero/node" -NoNewline
+$dd = Get-DataDirFromUnitFile $unitFile
+if ($dd -eq '/srv/dero/node') { Pass 'Get-DataDirFromUnitFile falls back to --data-dir' } else { Fail "Get-DataDirFromUnitFile falls back to --data-dir (got '$dd')" }
+# macOS launchd plist data-dir resolution
+$plistFile = Join-Path $snapFix 'derod.plist'
+Set-Content $plistFile '<?xml version="1.0"?><plist><dict><key>WorkingDirectory</key><string>/Users/priest/Crypto/dero/node</string></dict></plist>' -NoNewline
+$dd = Get-DataDirFromPlist $plistFile
+if ($dd -eq '/Users/priest/Crypto/dero/node') { Pass 'Get-DataDirFromPlist reads WorkingDirectory' } else { Fail "Get-DataDirFromPlist reads WorkingDirectory (got '$dd')" }
+Set-Content $plistFile '<?xml version="1.0"?><plist><dict><key>ProgramArguments</key><array><string>/usr/bin/derod</string><string>--data-dir=/srv/dero/node</string></array></dict></plist>' -NoNewline
+$dd = Get-DataDirFromPlist $plistFile
+if ($dd -eq '/srv/dero/node') { Pass 'Get-DataDirFromPlist falls back to --data-dir' } else { Fail "Get-DataDirFromPlist falls back to --data-dir (got '$dd')" }
+# Cross-platform external-node plumbing (source-grep: macOS launchd + Windows paths)
+$platPs = Get-Content (Join-Path $ProjectDir 'lib/platform.ps1') -Raw
+if ($platPs -match 'Set-Variable -Name IsWindows' -and $platPs -notmatch '\$script:IsWindows = if') { Pass 'platform.ps1 installs OS vars via Set-Variable (PS 5.1 + 6+ safe)' } else { Fail 'platform.ps1 installs OS vars via Set-Variable (PS 5.1 + 6+ safe)' }
+$rpcPs = Get-Content (Join-Path $ProjectDir 'lib/rpc.ps1') -Raw
+if ($rpcPs -match 'launchctl list' -and $rpcPs -match 'org\.deronode\.derod' -and $rpcPs -match 'Get-ProcessExe' -and $rpcPs -match 'Get-ProcessCwd' -and $rpcPs -match 'Get-DataDirFromPlist' -and $rpcPs -match 'Library/LaunchDaemons') { Pass 'rpc.ps1 detects external derod on macOS (launchd) + Windows (ExecutablePath)' } else { Fail 'rpc.ps1 detects external derod on macOS (launchd) + Windows (ExecutablePath)' }
+$snapPs2 = Get-Content (Join-Path $ProjectDir 'lib/snapshot.ps1') -Raw
+if ($snapPs2 -match 'ExecutablePath = \$_\.ExecutablePath') { Pass 'snapshot.ps1 process table captures ExecutablePath on Windows' } else { Fail 'snapshot.ps1 process table captures ExecutablePath on Windows' }
+$nodePs = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($nodePs -match 'Start-ExternalLaunchd' -and $nodePs -match 'Stop-ExternalLaunchd' -and $nodePs -match '\$script:IsMacOS\) \{ Start-ExternalLaunchd; return \}') { Pass 'node.ps1 start/stop route to launchd on macOS' } else { Fail 'node.ps1 start/stop route to launchd on macOS' }
+if ($nodePs -match 'Get-ProcessExe \$proc\.Pid' -and $nodePs -match 'launchctl kickstart -k') { Pass 'Update-ExternalNode resolves binary portably + restarts launchd' } else { Fail 'Update-ExternalNode resolves binary portably + restarts launchd' }
+# Get-SnapshotChainDir resolves the external node's real data dir
+function Test-ExternalInstalled { return $true }
+function Get-ExternalDataDir { return (Join-Path $snapFix 'extnode') }
+New-Item -ItemType Directory -Path (Join-Path $snapFix 'extnode/mainnet') -Force | Out-Null
+Set-Content (Join-Path $snapFix 'extnode/mainnet/topo.map') 'x' -NoNewline
+$script:DataDirReal = (Join-Path $snapFix 'decoy')
+$c = Get-SnapshotChainDir
+if ($c -eq (Join-Path $snapFix 'extnode/mainnet')) { Pass 'Get-SnapshotChainDir resolves external data dir' } else { Fail "Get-SnapshotChainDir resolves external data dir (got '$c')" }
+function Test-ExternalInstalled { return $false }
+$c = Get-SnapshotChainDir
+if ($c -eq $script:DataDirReal) { Pass 'Get-SnapshotChainDir falls back to DataDirReal' } else { Fail "Get-SnapshotChainDir falls back to DataDirReal (got '$c')" }
+# missing-member pre-check fails clearly (external stub stays off)
+$incFix = Join-Path $snapFix 'incomplete'
+New-Item -ItemType Directory -Path (Join-Path $incFix 'balances/ab') -Force | Out-Null
+Set-Content (Join-Path $incFix 'balances/ab/x1') 'blob' -NoNewline
+Set-Content (Join-Path $incFix 'topo.map') 'topomapdata' -NoNewline
+$script:DataDirReal = $incFix
+$script:SnapshotYes = $false
+$script:DryRun = $false
+$errOut = ''
+try {
+    $ok = New-Snapshot
+    if ($ok) { Fail 'New-Snapshot rejects incomplete chain dir' } else { Pass 'New-Snapshot rejects incomplete chain dir' }
+} catch {
+    Fail "New-Snapshot rejects incomplete chain dir (threw: $($_.Exception.Message))"
+}
 Remove-Item -Path $snapFix -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path "$snapFix.bak-*" -Force -ErrorAction SilentlyContinue
 
-# 7. Dry-run is offline (no download, no config, no dirs created)
+# 7. Dry-run is offline (no download, no config, no dirs created). Run from an
+# isolated temp copy of the runner so the test can assert 'no bin/ created'
+# without touching (or deleting!) the real project bin/ — a previous version
+# Remove-Item'd $ProjectDir/bin, nuking a user's installed derod on every smoke run.
 Write-Host ''
 Write-Host '7. Dry-run is offline:'
-$dryCfg = Join-Path $ProjectDir '.dry-test.json'
-Remove-Item -Path $dryCfg, (Join-Path $ProjectDir 'bin'), (Join-Path $ProjectDir 'drydata'), (Join-Path $ProjectDir 'drylogs') -Recurse -Force -ErrorAction SilentlyContinue
-$out = (& ./node.ps1 --config=$dryCfg --dry-run --sync-profile=pruned --data-dir="$ProjectDir/drydata" --log-dir="$ProjectDir/drylogs" 6>&1 2>&1 | Out-String)
+$dryTmp = Join-Path $ProjectDir '.dry-run-test'
+Remove-Item -Path $dryTmp -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $dryTmp -Force | Out-Null
+Copy-Item (Join-Path $ProjectDir 'node.ps1'), (Join-Path $ProjectDir 'catalog.json') $dryTmp -Force
+Copy-Item (Join-Path $ProjectDir 'lib') (Join-Path $dryTmp 'lib') -Recurse -Force
+$dryCfg = Join-Path $dryTmp '.dry-test.json'
+$out = (& (Join-Path $dryTmp 'node.ps1') --config=$dryCfg --dry-run --sync-profile=pruned --data-dir="$dryTmp/drydata" --log-dir="$dryTmp/drylogs" 6>&1 2>&1 | Out-String)
 if ($LASTEXITCODE -eq 0) { Pass '--dry-run exits 0' } else { Fail "--dry-run exits 0 (rc=$LASTEXITCODE)" }
-if ($out -match '--prune-history=100000') { Pass 'pruned profile in argv' } else { Fail 'pruned profile in argv' }
-if ($out -match [regex]::Escape("--data-dir=$ProjectDir/drydata")) { Pass 'data-dir override in argv' } else { Fail 'data-dir override in argv' }
-if (-not (Test-Path (Join-Path $ProjectDir 'bin'))) { Pass 'no bin/ created' } else { Fail 'no bin/ created' }
-if (-not (Test-Path (Join-Path $ProjectDir 'drydata'))) { Pass 'no data dir created' } else { Fail 'no data dir created' }
+# The drydata dir is fresh (no topo.map) so prune is deferred in the argv too.
+if ($out -notmatch '--prune-history=100000') { Pass 'pruned profile in argv deferred on fresh chain' } else { Fail 'pruned profile in argv deferred on fresh chain' }
+if ($out -match [regex]::Escape("--data-dir=$dryTmp/drydata")) { Pass 'data-dir override in argv' } else { Fail 'data-dir override in argv' }
+if (-not (Test-Path (Join-Path $dryTmp 'bin'))) { Pass 'no bin/ created' } else { Fail 'no bin/ created' }
+if (-not (Test-Path (Join-Path $dryTmp 'drydata'))) { Pass 'no data dir created' } else { Fail 'no data dir created' }
 if (-not (Test-Path $dryCfg)) { Pass 'no config file written' } else { Fail 'no config file written' }
-Remove-Item -Path $dryCfg, (Join-Path $ProjectDir 'bin'), (Join-Path $ProjectDir 'drydata'), (Join-Path $ProjectDir 'drylogs') -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -Path $dryTmp -Recurse -Force -ErrorAction SilentlyContinue
 
 # 8. Running daemon at latest skips download
 Write-Host ''
@@ -200,13 +366,46 @@ if ($rel -and $tagRel -and $rel -eq $tagRel) { Pass 'running release matches tag
 $upd = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($upd -match 'Get-DaemonReleaseNumber' -and $upd -match 'runRel -eq \$latestRel') { Pass 'Update-Node guards on running version' } else { Fail 'Update-Node guards on running version' }
 if ($upd -match 'Copy-Item \$script:BinaryPath \$tmp' -and $upd -match 'Move-Item -Force \$tmp \$bin') { Pass 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' } else { Fail 'Update-ExternalNode replaces via temp+rename (no ETXTBSY)' }
+$dlPs = Get-Content (Join-Path $ProjectDir 'lib/download.ps1') -Raw
+if ($dlPs -match 'Reusing cached' -and $dlPs -match 'archives' -and $dlPs -match 'cached archive failed checksum') { Pass 'Invoke-FetchDerod caches + reuses the downloaded archive' } else { Fail 'Invoke-FetchDerod caches + reuses the downloaded archive' }
 
-# 9. Menu option 6 (reconfigure) is dispatched after the menu
+# 9. Menu option 7 (reconfigure) is dispatched after the menu
 Write-Host ''
 Write-Host '9. Menu reconfigure dispatch:'
 $menuSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
-if ($menuSrc -match '''6'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 6 sets Action=reconfigure" } else { Fail "menu option 6 sets Action=reconfigure" }
+if ($menuSrc -match '''7'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 7 sets Action=reconfigure" } else { Fail "menu option 7 sets Action=reconfigure" }
 if ($menuSrc -match "'reconfigure' \{ Reconfigure-Node \}") { Pass "post-menu switch dispatches reconfigure" } else { Fail "post-menu switch dispatches reconfigure" }
+if ($menuSrc -match 'No derod installed yet' -and $menuSrc -match 'Ensure-Binary' -and $menuSrc -match "\$script:Action = 'start'") { Pass 'first-run install continues straight into start' } else { Fail 'first-run install continues straight into start' }
+# first-run install honors the configure run-mode answer (service vs foreground)
+$cfgSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($cfgSrc -match 'function Configure' -and $cfgSrc -match 'Background system service' -and $cfgSrc -match '\$script:AsService = \$true' -and $cfgSrc -match "Read-Ask 'Choose' '2'") { Pass 'Configure offers system-service install (run mode question)' } else { Fail 'Configure offers system-service install (run mode question)' }
+if ($cfgSrc -match '\$script:AsService = \$false' -and $cfgSrc -match "\$script:Action = 'start'" -and $menuSrc -notmatch 'AsService = \$false\s*\r?\n\s*return') { Pass "first-run install keeps configure's service/foreground choice" } else { Fail "first-run install keeps configure's service/foreground choice" }
+# reconfigure also continues straight into start (only when nothing is running)
+if ($menuSrc -match 'function Reconfigure-Node' -and $menuSrc -match 'Test-NodeRunning' -and $menuSrc -match 'Start-Node') { Pass 'reconfigure continues into start when stopped' } else { Fail 'reconfigure continues into start when stopped' }
+# resync command: parse, menu, dispatch, wipe+fastsync+start
+if ($menuSrc -match '''resync'' \{ \$script:Action = ''resync'' \}' -and $menuSrc -match '''11'' \{ \$script:Action = ''resync''; return \}' -and $menuSrc -match '''resync'' \{ Invoke-Resync \}') { Pass 'resync wired into parse/menu/dispatch' } else { Fail 'resync wired into parse/menu/dispatch' }
+# build command (compile community-dev source): parse, menu, dispatch
+if ($menuSrc -match '''build'' \{ \$script:Action = ''build'' \}' -and $menuSrc -match '''6'' \{ \$script:Action = ''build''; return \}' -and $menuSrc -match '''build'' \{ Build-Node \}') { Pass 'build wired into parse/menu/dispatch' } else { Fail 'build wired into parse/menu/dispatch' }
+$bldSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($bldSrc -match 'function Build-Node' -and $bldSrc -match 'Invoke-BuildDerodFromSource' -and $bldSrc -match 'Stop-Service' -and $bldSrc -match 'Install-Service' -and $bldSrc -match 'Test-ExternalInstalled') { Pass 'Build-Node stops+builds+restarts, refuses external' } else { Fail 'Build-Node stops+builds+restarts, refuses external' }
+if ($bldSrc -match 'Test-GoAvailable' -and $bldSrc -match 'Go toolchain not found') { Pass 'Build-Node guards on the Go toolchain' } else { Fail 'Build-Node guards on the Go toolchain' }
+$bldLib = Get-Content (Join-Path $ProjectDir 'lib/build.ps1') -Raw
+if ($bldLib -match 'git clone --depth 1 --branch \$script:DevBranch' -and $bldLib -match 'go build -o derod ./cmd/derod' -and $bldLib -match 'community-dev@' -and $bldLib -match 'Test-SourceBuild') { Pass 'lib/build.ps1 clones community-dev + go builds derod + marks source' } else { Fail 'lib/build.ps1 clones community-dev + go builds derod + marks source' }
+if ($bldLib -match 'Find-DerodBinary' -and $bldLib -match 'magic') { Pass 'lib/build.ps1 reuses Find-DerodBinary + magic check' } else { Fail 'lib/build.ps1 reuses Find-DerodBinary + magic check' }
+# source builds are kept by start (Test-CacheFresh) but replaced by update
+if ($dlPs -match 'Test-SourceBuild\) \{ return \$true' -and $bldSrc -match '-not \(Test-SourceBuild\) -and \(Test-CacheFresh\)') { Pass 'start keeps source build; update swaps back to release' } else { Fail 'start keeps source build; update swaps back to release' }
+# update --source=dev routes through the community-dev compile path; menu
+# option 5 offers the release-vs-community-dev choice.
+if ($menuSrc -match 'UpdateSource -eq ''dev''' -and $menuSrc -match 'Build-Node' -and $menuSrc -match 'Update source:' -and $menuSrc -match 'community-dev source \(compile\)') { Pass 'update --source=dev routes to Build-Node (menu option 5 offers the choice)' } else { Fail 'update --source=dev routes to Build-Node (menu option 5 offers the choice)' }
+if ($menuSrc -match '''--source'' \{ \$script:UpdateSource = \$val \}') { Pass "Parse-Args accepts --source" } else { Fail "Parse-Args accepts --source" }
+if ($menuSrc -match 'function Invoke-Resync' -and $menuSrc -match 'Get-SnapshotChainDir' -and $menuSrc -match 'Remove-Item \$chainDir -Recurse -Force' -and $menuSrc -match 'fastsync = \$true' -and $menuSrc -match 'prune_history = \$null' -and $menuSrc -match 'Start-Node') { Pass 'resync wipes chain then fastsync-bootstraps and starts' } else { Fail 'resync wipes chain then fastsync-bootstraps and starts' }
+# menu-driven entry loops back to the menu after each action (no exit)
+if ($menuSrc -match 'while \(\$true\)' -and $menuSrc -match '\$script:MenuMode = \$true') { Pass 'menu-driven entry loops back to the menu' } else { Fail 'menu-driven entry loops back to the menu' }
+# Start-Node runs derod as a child and returns to the menu in menu mode
+if ($menuSrc -match 'function Start-Node' -and $menuSrc -match '\$script:MenuMode') { Pass 'Start-Node returns to the menu in menu mode' } else { Fail 'Start-Node returns to the menu in menu mode' }
+# logs command: parse, menu, dispatch, tail selection
+if ($menuSrc -match '''logs'' \{ \$script:Action = ''logs'' \}' -and $menuSrc -match '''12'' \{ \$script:Action = ''logs''; return \}' -and $menuSrc -match '''logs'' \{ Show-Logs \}') { Pass 'logs wired into parse/menu/dispatch' } else { Fail 'logs wired into parse/menu/dispatch' }
+if ($menuSrc -match 'function Show-Logs' -and $menuSrc -match 'Get-Content.*-Wait' -and $menuSrc -match 'derod.out.log') { Pass 'Show-Logs tails derod.log and falls back to out/err captures' } else { Fail 'Show-Logs tails derod.log and falls back to out/err captures' }
 
 # 10. Snapshot prompts to stop a running node (source-grep on node.ps1)
 Write-Host ''
