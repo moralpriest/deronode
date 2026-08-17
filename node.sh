@@ -9,7 +9,11 @@ INSTALL_DIR="$PROJECT_DIR"
 BIN_DIR="$PROJECT_DIR/bin"
 CONFIG_FILE="$PROJECT_DIR/config.json"
 CATALOG_FILE="$PROJECT_DIR/catalog.json"
-BINARY_PATH="$BIN_DIR/derod/derod"
+# Windows cannot execute an extensionless file (CreateProcess/ShellExecute
+# fail or pop the "open with" dialog), so the managed binary is derod.exe
+# there — adjusted after detect_platform below.
+BINARY_NAME="derod"
+BINARY_PATH="$BIN_DIR/derod/$BINARY_NAME"
 
 # shellcheck source=lib/platform.sh
 source "$LIB_DIR/platform.sh"
@@ -29,6 +33,11 @@ source "$LIB_DIR/service.sh"
 source "$LIB_DIR/snapshot.sh"
 
 detect_platform
+# Windows (incl. Git Bash/MSYS2/MINGW) needs the .exe suffix for the binary.
+if [ "$OS" = "windows" ]; then
+    BINARY_NAME="derod.exe"
+    BINARY_PATH="$BIN_DIR/derod/$BINARY_NAME"
+fi
 
 # ── CLI state ──
 ACTION="menu"
@@ -280,11 +289,16 @@ menu() {
         local a
         ask a "Choose" "1"
         case "$a" in
-            1|"") 
+            1|"")
                 [ -f "$CONFIG_FILE" ] || configure
-                # Continue straight into `start` after installing — no second
-                # menu prompt.
+                # The install just finished — confirm the user actually wants
+                # the node started now (interactive only; scripted runs
+                # auto-continue). The configure run-mode answer (service vs
+                # foreground) is honored via AS_SERVICE.
                 if ensure_binary; then
+                    if [ -t 0 ] && [ "$(yesno "derod installed. Start the node now?" y)" != "y" ]; then
+                        return   # back to the menu — the binary now exists, full menu shows
+                    fi
                     ACTION=start
                     return
                 fi

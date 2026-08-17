@@ -50,7 +50,7 @@ function Resolve-Release {
 # never silently replace it with a release download; only an explicit
 # `update` swaps back to the release.
 function Test-CacheFresh {
-    $derod = Join-Path $BinDir 'derod/derod'
+    $derod = Join-Path $BinDir "derod/$($script:BinaryName)"
     $tagfile = Join-Path $BinDir 'derod/.tag'
     if (-not (Test-Path $derod) -or -not (Test-Path $tagfile)) { return $false }
     if (Test-SourceBuild) { return $true }
@@ -157,7 +157,7 @@ function Invoke-FetchDerod {
         $found = Find-DerodBinary $x
         if (-not $found) { throw "derod binary not found in $($script:LastAsset)" }
 
-        $old = Join-Path $derodDir 'derod'
+        $old = Join-Path $derodDir $script:BinaryName
         # Back up the previous binary (timestamped) before replacing it, so an
         # update is reversible — same pattern as the external-node update path.
         if (Test-Path $old) {
@@ -173,7 +173,7 @@ function Invoke-FetchDerod {
         Set-Content (Join-Path $derodDir '.asset') $script:LastAsset -NoNewline
         # Keep the verified archive so the next install of this tag skips the download.
         Copy-Item $ar $cacheAr -Force
-        Write-Host "[*] derod $($script:LastTag) ready: $(Join-Path $derodDir 'derod')" -ForegroundColor Green
+        Write-Host "[*] derod $($script:LastTag) ready: $(Join-Path $derodDir $script:BinaryName)" -ForegroundColor Green
     } catch {
         Write-Host "[x] $($_.Exception.Message)" -ForegroundColor Red
         return $false

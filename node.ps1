@@ -6,10 +6,14 @@ $script:LibDir = Join-Path $script:InstallDir 'lib'
 $script:BinDir = Join-Path $script:InstallDir 'bin'
 $script:ConfigFile = Join-Path $script:InstallDir 'config.json'
 $script:CatalogFile = Join-Path $script:InstallDir 'catalog.json'
-$script:BinaryPath = Join-Path $script:BinDir 'derod/derod'
 
 . (Join-Path $script:LibDir 'platform.ps1')
 $script:Platform = Get-PwshPlatform
+# Windows cannot execute an extensionless file — CreateProcess/ShellExecute
+# fail or pop the "How do you want to open this file?" dialog — so the managed
+# binary is derod.exe there. Defined after platform.ps1 (needs $script:IsWindows).
+$script:BinaryName = if ($script:IsWindows) { 'derod.exe' } else { 'derod' }
+$script:BinaryPath = Join-Path $script:BinDir "derod/$($script:BinaryName)"
 
 . (Join-Path $script:LibDir 'ui.ps1')
 . (Join-Path $script:LibDir 'config.ps1')
@@ -256,10 +260,14 @@ function Show-Menu {
         $a = Read-Ask 'Choose' '1'
         if ($a -eq '1' -or $a -eq '') {
             if (-not (Test-Path $script:ConfigFile)) { Configure }
-            # Continue straight into `start` after installing — no second menu
-            # prompt. The run-mode answer from Configure (service vs
-            # foreground) is honored, so don't reset AsService here.
             if (-not (Ensure-Binary)) { exit 1 }
+            # The install just finished — confirm the user actually wants the
+            # node started now (interactive only; scripted runs auto-continue).
+            # The run-mode answer from Configure (service vs foreground) is
+            # honored via $script:AsService, so don't reset it here.
+            if ((Test-StdinInteractive) -and -not (Read-YesNo 'derod installed. Start the node now?' 'y')) {
+                return   # back to the menu — the binary now exists, full menu shows
+            }
             $script:Action = 'start'
             return
         } else { exit 0 }

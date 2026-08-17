@@ -82,20 +82,23 @@ function Invoke-BuildDerodFromSource {
     $found = Find-DerodBinary $script:SrcDir
     if (-not $found) { Write-Host '[x] derod binary not found after build' -ForegroundColor Red; return $false }
 
-    # Same executable-magic sanity check the release download uses.
+    # Same executable-magic sanity check the release download uses. Magic is
+    # the first FOUR bytes hexed (e.g. ELF 7f454c46, PE 4d5a9000) — the PE
+    # 'MZ' check must be a prefix match, not an exact one, or every Windows
+    # binary fails (4d5a9000 -ne '4d5a').
     $magic = ''
     try {
         $bytes = [System.IO.File]::ReadAllBytes($found.FullName)
         if ($bytes.Length -ge 4) { $magic = '{0:x2}{1:x2}{2:x2}{3:x2}' -f $bytes[0], $bytes[1], $bytes[2], $bytes[3] }
     } catch { }
-    if ($magic -notin @('7f454c46', 'cffaedfe', 'cafebabe', 'feedface', 'feedfacf', '4d5a')) {
+    if ($magic -notmatch '^(7f454c46|cffaedfe|cafebabe|feedface|feedfacf|4d5a)') {
         Write-Host '[x] Built derod failed the executable magic check' -ForegroundColor Red
         return $false
     }
 
     $derodDir = Join-Path $script:BinDir 'derod'
     New-Item -ItemType Directory -Path $derodDir -Force | Out-Null
-    $old = Join-Path $derodDir 'derod'
+    $old = Join-Path $derodDir $script:BinaryName
     # Back up the previous binary (timestamped) before replacing it, so a
     # source build never destroys the previous (e.g. release) binary.
     if (Test-Path $old) {
@@ -109,6 +112,6 @@ function Invoke-BuildDerodFromSource {
     Set-Content (Join-Path $derodDir '.tag') "community-dev@$($script:DevSha)" -NoNewline
     Set-Content (Join-Path $derodDir '.asset') 'community-dev' -NoNewline
     Set-Content (Join-Path $derodDir '.tagtime') ([int][double]::Parse((Get-Date -UFormat %s))) -NoNewline
-    Write-Host "[*] derod built from community-dev@$($script:DevSha): $(Join-Path $derodDir 'derod')" -ForegroundColor Green
+    Write-Host "[*] derod built from community-dev@$($script:DevSha): $(Join-Path $derodDir $script:BinaryName)" -ForegroundColor Green
     return $true
 }

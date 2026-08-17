@@ -92,10 +92,12 @@ reversible; the previous binary is never silently destroyed. Only the newest
 `deronode build` (menu option 6) compiles derod from the latest
 [DEROFDN/derohe](https://github.com/DEROFDN/derohe) **`community-dev`** branch
 with your local Go toolchain (`go build ./cmd/derod`), then installs the binary
-into `bin/derod/derod` exactly like a release download. It shallow-clones the
-branch into `bin/src/derohe` (kept for incremental rebuilds — later `build`
-runs just fetch + reset), needs Go 1.17+ (`https://go.dev/dl/`), and restarts
-a running node after the build, mirroring `update`.
+into `bin/derod/derod` (Windows: `derod.exe`) exactly like a release download.
+It shallow-clones the branch into `bin/src/derohe` (kept for incremental
+rebuilds — later `build` runs just fetch + reset), needs Go 1.17+
+(`https://go.dev/dl/`), and restarts a running node after the build, mirroring
+`update`. The executable-magic sanity check accepts both ELF (`7f454c46`) and
+PE (`MZ` = `4d5a...`) binaries, so builds work on Windows too.
 
 A source-built binary is marked and kept: `start`/`status` never silently
 replace it with a release download, so a community-dev node stays on
@@ -117,7 +119,11 @@ First-run setup asks a **run mode** question — `1) Background system service`
 service on any OS without needing to remember `--service`. Answering `1`
 installs and starts a systemd user unit on Linux, a LaunchAgent on macOS, or a
 background process on Windows; `2` runs in the terminal. The same question is
-re-asked by `--reconfigure`/menu option 7.
+re-asked by `--reconfigure`/menu option 7. After the first-run download+install
+finishes, it asks **"Start the node now?"** before launching (piped/scripted
+runs skip the prompt). On Windows the binary is `derod.exe` — an extensionless
+file can't be executed there and would pop the "How do you want to open this
+file?" dialog instead of starting the node.
 
 ### Snapshots
 

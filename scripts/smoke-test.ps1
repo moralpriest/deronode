@@ -384,7 +384,7 @@ Write-Host '9. Menu reconfigure dispatch:'
 $menuSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($menuSrc -match '''7'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 7 sets Action=reconfigure" } else { Fail "menu option 7 sets Action=reconfigure" }
 if ($menuSrc -match "'reconfigure' \{ Reconfigure-Node \}") { Pass "post-menu switch dispatches reconfigure" } else { Fail "post-menu switch dispatches reconfigure" }
-if ($menuSrc -match 'No derod installed yet' -and $menuSrc -match 'Ensure-Binary' -and $menuSrc -match "\$script:Action = 'start'") { Pass 'first-run install continues straight into start' } else { Fail 'first-run install continues straight into start' }
+if ($menuSrc -match 'No derod installed yet' -and $menuSrc -match 'Ensure-Binary' -and $menuSrc -match "Read-YesNo 'derod installed\. Start the node now\?'" -and $menuSrc -match "\$script:Action = 'start'") { Pass 'first-run install prompts to start the node, then continues into start' } else { Fail 'first-run install prompts to start the node, then continues into start' }
 # first-run install honors the configure run-mode answer (service vs foreground)
 $cfgSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($cfgSrc -match 'function Configure' -and $cfgSrc -match 'Background system service' -and $cfgSrc -match '\$script:AsService = \$true' -and $cfgSrc -match "Read-Ask 'Choose' '2'") { Pass 'Configure offers system-service install (run mode question)' } else { Fail 'Configure offers system-service install (run mode question)' }
@@ -401,6 +401,11 @@ if ($bldSrc -match 'Test-GoAvailable' -and $bldSrc -match 'Go toolchain not foun
 $bldLib = Get-Content (Join-Path $ProjectDir 'lib/build.ps1') -Raw
 if ($bldLib -match 'git clone --depth 1 --branch \$script:DevBranch' -and $bldLib -match 'go build -o derod ./cmd/derod' -and $bldLib -match 'community-dev@' -and $bldLib -match 'Test-SourceBuild') { Pass 'lib/build.ps1 clones community-dev + go builds derod + marks source' } else { Fail 'lib/build.ps1 clones community-dev + go builds derod + marks source' }
 if ($bldLib -match 'Find-DerodBinary' -and $bldLib -match 'magic') { Pass 'lib/build.ps1 reuses Find-DerodBinary + magic check' } else { Fail 'lib/build.ps1 reuses Find-DerodBinary + magic check' }
+# Windows binary naming + PE magic check fixes (community-dev build path)
+$nodeSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
+if ($nodeSrc -match '\$script:BinaryName = if \(\$script:IsWindows\)' -and $nodeSrc -match 'derod\.exe') { Pass 'node.ps1 names the Windows binary derod.exe' } else { Fail 'node.ps1 names the Windows binary derod.exe' }
+if ($bldLib -match '\$script:BinaryName' -and $dlPs -match '\$script:BinaryName') { Pass 'download/build install sites use the platform binary name' } else { Fail 'download/build install sites use the platform binary name' }
+if ($bldLib -match '\^\(' -and $bldLib -match '4d5a\)') { Pass 'lib/build.ps1 magic check accepts PE MZ (4d5a prefix)' } else { Fail 'lib/build.ps1 magic check accepts PE MZ (4d5a prefix)' }
 if ($bldLib -match '\$old\.bak-') { Pass 'lib/build.ps1 backs up previous binary before replacing' } else { Fail 'lib/build.ps1 backs up previous binary before replacing' }
 # source builds are kept by start (Test-CacheFresh) but replaced by update
 if ($dlPs -match 'Test-SourceBuild\) \{ return \$true' -and $bldSrc -match '-not \(Test-SourceBuild\) -and \(Test-CacheFresh\)') { Pass 'start keeps source build; update swaps back to release' } else { Fail 'start keeps source build; update swaps back to release' }

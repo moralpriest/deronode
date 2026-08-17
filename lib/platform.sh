@@ -9,6 +9,8 @@ detect_platform() {
     OS="$(uname -s 2>/dev/null | tr '[:upper:]' '[:lower:]')"
     case "$OS" in
         linux|darwin|freebsd|windows) ;;
+        # Git Bash / MSYS2 / MINGW / Cygwin all report a windows-like uname.
+        mingw*|msys*|cygwin*) OS="windows" ;;
         *) OS="linux" ;;
     esac
 

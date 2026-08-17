@@ -40,7 +40,7 @@ resolve_release() {
 # `update` swaps back to the release.
 cached_tag_fresh() {
     local tagfile="$BIN_DIR/derod/.tag"
-    [ -f "$BIN_DIR/derod/derod" ] || return 1
+    [ -f "$BIN_DIR/derod/$BINARY_NAME" ] || return 1
     [ -f "$tagfile" ] || return 1
     is_source_build && return 0
     [ "$(cat "$tagfile" 2>/dev/null)" = "$LAST_TAG" ] && return 0
@@ -156,8 +156,11 @@ fetch_derod() {
     # Verify it is a real executable (ELF/Mach-O/MZ), not a truncated download.
     local magic ok=1
     magic="$(head -c 4 "$found" | od -An -tx1 | tr -d ' \n')"
+    # PE 'MZ' must be a prefix match — the first four bytes are e.g. 4d5a9000,
+    # not the bare 4d5a, so an exact 4d5a pattern would reject every Windows
+    # binary.
     case "$magic" in
-        7f454c46|cffaedfe|cafebabe|feedface|feedfacf|4d5a) ok=0 ;;
+        7f454c46|cffaedfe|cafebabe|feedface|feedfacf|4d5a*) ok=0 ;;
     esac
     if [ "$ok" -ne 0 ]; then
         rm -rf "$tmp"
@@ -167,7 +170,7 @@ fetch_derod() {
 
     # Back up the previous binary (timestamped) before replacing it, so an
     # update is reversible — same pattern as the external-node update path.
-    local old="$BIN_DIR/derod/derod" bak_ts
+    local old="$BIN_DIR/derod/$BINARY_NAME" bak_ts
     if [ -f "$old" ]; then
         bak_ts="$(date +%Y%m%d_%H%M%S)"
         cp -f "$old" "$old.bak-$bak_ts" || { rm -rf "$tmp"; echo "${C_ERR}[x] Backup failed: $old.bak-$bak_ts${C_RESET}" >&2; return 1; }
@@ -182,5 +185,5 @@ fetch_derod() {
     # Keep the verified archive so the next install of this tag skips the download.
     cp -f "$ar" "$cache_ar"
     rm -rf "$tmp"
-    echo "${C_OK}[*] derod $LAST_TAG ready: $BIN_DIR/derod/derod${C_RESET}" >&2
+    echo "${C_OK}[*] derod $LAST_TAG ready: $BIN_DIR/derod/$BINARY_NAME${C_RESET}" >&2
 }

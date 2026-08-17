@@ -63,8 +63,11 @@ build_derod_from_source() {
     # Same executable-magic sanity check the release download uses.
     local magic ok=1
     magic="$(head -c 4 "$found" | od -An -tx1 | tr -d ' \n')"
+    # PE 'MZ' must be a prefix match — the first four bytes are e.g. 4d5a9000,
+    # not the bare 4d5a, so an exact 4d5a pattern would reject every Windows
+    # binary.
     case "$magic" in
-        7f454c46|cffaedfe|cafebabe|feedface|feedfacf|4d5a) ok=0 ;;
+        7f454c46|cffaedfe|cafebabe|feedface|feedfacf|4d5a*) ok=0 ;;
     esac
     if [ "$ok" -ne 0 ]; then
         echo "${C_ERR}[x] Built derod failed the executable magic check${C_RESET}" >&2
@@ -74,7 +77,7 @@ build_derod_from_source() {
     mkdir -p "$BIN_DIR/derod"
     # Back up the previous binary (timestamped) before replacing it, so a
     # source build never destroys the previous (e.g. release) binary.
-    local old="$BIN_DIR/derod/derod" bak_ts
+    local old="$BIN_DIR/derod/$BINARY_NAME" bak_ts
     if [ -f "$old" ]; then
         bak_ts="$(date +%Y%m%d_%H%M%S)"
         cp -f "$old" "$old.bak-$bak_ts" || { echo "${C_ERR}[x] Backup failed: $old.bak-$bak_ts${C_RESET}" >&2; return 1; }
@@ -86,5 +89,5 @@ build_derod_from_source() {
     printf 'community-dev@%s\n' "$DEV_SHA" > "$BIN_DIR/derod/.tag"
     printf 'community-dev\n' > "$BIN_DIR/derod/.asset"
     date +%s > "$BIN_DIR/derod/.tagtime"
-    echo "${C_OK}[*] derod built from community-dev@$DEV_SHA: $BIN_DIR/derod/derod${C_RESET}" >&2
+    echo "${C_OK}[*] derod built from community-dev@$DEV_SHA: $BIN_DIR/derod/$BINARY_NAME${C_RESET}" >&2
 }

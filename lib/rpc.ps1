@@ -206,7 +206,7 @@ function Test-ExternalSystemUnit {
 
 function Write-NodeStatus {
     param([string]$DerodDir)
-    $bin = Join-Path $DerodDir 'derod'
+    $bin = Join-Path $DerodDir $script:BinaryName
     if (Test-NodeRunning) {
         $info = Invoke-RpcCall 'DERO.GetInfo'
         $h = [int]$info.height

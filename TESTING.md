@@ -13,8 +13,8 @@ explicitly stop it first.
 cd ~/Projects/deronode
 
 # Full smoke suites — self-contained, wipe and recreate their own bin/
-bash scripts/smoke-test.sh              # expect: 169 passed, 0 failed
-pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 141 passed, 0 failed
+bash scripts/smoke-test.sh              # expect: 173 passed, 0 failed
+pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 144 passed, 0 failed
 
 # Dry-run — offline proof: prints the exact derod argv, writes nothing
 bash node.sh --dry-run --sync-profile=pruned --data-dir=/tmp/d1 --log-dir=/tmp/d2
@@ -105,8 +105,24 @@ excludes our launchd agent and `cmd_update_external` is portable; PS sections
 `Start`/`Stop`/`Update-ExternalNode`, and the Windows `ExecutablePath` capture.
 
 First-run flow: when the menu's "Configure & install derod" finishes the
-download, it continues straight into `start` (foreground) instead of bouncing
-back to the menu prompt. (Sections 14 bash / 9 ps cover the transition.)
+download it asks **"derod installed. Start the node now?"** (interactive
+only — piped/scripted runs skip the prompt) and, on yes, continues into
+`start` (foreground or service per the run-mode answer) instead of bouncing
+back to the menu prompt. (Sections 14 bash / 9 ps cover the prompt +
+transition.)
+
+Windows binary naming: on Windows the managed binary is `derod.exe`, not
+`derod` — an extensionless file cannot be executed there (CreateProcess/
+ShellExecute fail or pop the "How do you want to open this file?" dialog,
+which silently broke the first-run auto-start). `node.ps1`/`node.sh` derive
+`BinaryPath`/`BINARY_PATH` from the platform, and every install site
+(download/build libs, cache-fresh check, status probe) uses that name.
+`lib/platform.sh` also maps Git Bash / MSYS2 / MINGW / Cygwin unames to
+`windows`. The executable-magic sanity check accepts PE binaries too: magic
+is the first **four** bytes hexed, so the `MZ` check is a `4d5a*` prefix
+match, not an exact `4d5a` one — previously every Windows build/download
+failed with "failed the executable magic check". (Sections 14 bash / 9 ps
+cover the naming + magic fix greps.)
 
 Prune round-trip: an explicit `"prune_history": null` in config.json means
 "no --prune-history flag" (needed to bootstrap a fresh chain — derod exits

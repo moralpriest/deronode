@@ -99,7 +99,8 @@ INSTALL_DIR="$PROJECT_DIR"
 LIB_DIR="$PROJECT_DIR/lib"
 CONFIG_FILE="$PROJECT_DIR/config.json"
 CATALOG_FILE="$PROJECT_DIR/catalog.json"
-BINARY_PATH="$PROJECT_DIR/bin/derod/derod"
+BINARY_NAME="derod"
+BINARY_PATH="$PROJECT_DIR/bin/derod/$BINARY_NAME"
 source "$LIB_DIR/platform.sh"
 source "$LIB_DIR/ui.sh"
 source "$LIB_DIR/config.sh"
@@ -713,12 +714,13 @@ menu_src="$(sed -n '/^menu()/,/^}/p' node.sh)"
 echo "$menu_src" | grep -q '7) ACTION=reconfigure' && pass "menu option 7 sets ACTION=reconfigure" || fail "menu option 7 sets ACTION=reconfigure"
 entry_src="$(sed -n '/^case "\$ACTION" in/,$p' node.sh)"
 echo "$entry_src" | grep -q 'reconfigure) cmd_reconfigure ;;' && pass "post-menu case dispatches reconfigure" || fail "post-menu case dispatches reconfigure"
-# first-run install (menu option 1 with no derod) continues straight into start
+# first-run install (menu option 1 with no derod): asks to start the node,
+# then continues into start on yes
 first_run="$(sed -n '/^menu()/,/^}/p' node.sh)"
-if echo "$first_run" | grep -q 'No derod installed yet' && echo "$first_run" | grep -q 'ensure_binary; then' && echo "$first_run" | grep -q 'ACTION=start'; then
-    pass "first-run install continues straight into start"
+if echo "$first_run" | grep -q 'No derod installed yet' && echo "$first_run" | grep -q 'ensure_binary; then' && echo "$first_run" | grep -q 'Start the node now' && echo "$first_run" | grep -q 'ACTION=start'; then
+    pass "first-run install prompts to start the node, then continues into start"
 else
-    fail "first-run install continues straight into start"
+    fail "first-run install prompts to start the node, then continues into start"
 fi
 # first-run install honors the configure run-mode answer (service vs foreground)
 cfg_src="$(sed -n '/^configure()/,/^}/p' node.sh)"
@@ -728,12 +730,35 @@ else
     fail "configure offers system-service install (run mode question)"
 fi
 # The first-run branch (before the menu's while loop) sets ACTION=start and
-# never touches AS_SERVICE, so the configure answer survives into cmd_start.
+# never ASSIGNS AS_SERVICE, so the configure answer survives into cmd_start.
 first_run_branch="$(echo "$first_run" | sed -n '1,/while true/p')"
-if echo "$first_run_branch" | grep -q 'ACTION=start' && ! echo "$first_run_branch" | grep -q 'AS_SERVICE'; then
+if echo "$first_run_branch" | grep -q 'ACTION=start' && ! echo "$first_run_branch" | grep -q 'AS_SERVICE='; then
     pass "first-run install keeps configure's service/foreground choice"
 else
     fail "first-run install keeps configure's service/foreground choice"
+fi
+# Windows binary naming + PE magic check fixes (community-dev build path)
+plat="$(cat "$LIB_DIR/platform.sh")"
+if echo "$plat" | grep -q 'mingw\*|msys\*|cygwin\*' && echo "$plat" | grep -q 'OS="windows"'; then
+    pass "platform.sh detects Git Bash/MSYS/MINGW as windows"
+else
+    fail "platform.sh detects Git Bash/MSYS/MINGW as windows"
+fi
+node_top="$(sed -n '1,/^source .*ui.sh/p' node.sh)"
+if echo "$node_top" | grep -q 'BINARY_NAME="derod"' && grep -q '\[ "$OS" = "windows" \]' node.sh && grep -q 'BINARY_NAME="derod.exe"' node.sh; then
+    pass "node.sh names the Windows binary derod.exe"
+else
+    fail "node.sh names the Windows binary derod.exe"
+fi
+if grep -q '\$BINARY_NAME' "$LIB_DIR/download.sh" && grep -q '\$BINARY_NAME' "$LIB_DIR/build.sh"; then
+    pass "download/build install sites use the platform binary name"
+else
+    fail "download/build install sites use the platform binary name"
+fi
+if grep -q '4d5a\*' "$LIB_DIR/build.sh" && grep -q '4d5a\*' "$LIB_DIR/download.sh"; then
+    pass "magic check accepts PE 'MZ' (4d5a*) prefix"
+else
+    fail "magic check accepts PE 'MZ' (4d5a*) prefix"
 fi
 # reconfigure also continues straight into start (only when nothing is running)
 reconf="$(sed -n '/^cmd_reconfigure()/,/^}/p' node.sh)"
