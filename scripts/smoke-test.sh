@@ -891,6 +891,12 @@ if grep -q 'send) ACTION="send"' node.sh && grep -q '14) ACTION=send' node.sh &&
 else
     fail "send/receive wired into parse/menu/dispatch"
 fi
+# menu option 15: receive — prompts for the join code, then dispatches receive
+if grep -q '15)' node.sh && grep -q 'Receive snapshot from a friend' node.sh && grep -q 'Join code' node.sh && grep -q 'ACTION=receive; return' node.sh; then
+    pass "menu option 15 prompts for the join code and dispatches receive"
+else
+    fail "menu option 15 prompts for the join code and dispatches receive"
+fi
 send_src="$(sed -n '/^cmd_send()/,/^}/p' node.sh)"
 if echo "$send_src" | grep -q 'thru host' && echo "$send_src" | grep -q 'snapshot_latest_archive' && echo "$send_src" | grep -q 'thru_ensure'; then
     pass "cmd_send hosts the newest snapshot via thruflux"
@@ -902,6 +908,25 @@ if echo "$recv_src" | grep -q 'thru join' && echo "$recv_src" | grep -q 'RECEIVE
     pass "cmd_receive joins a thruflux code"
 else
     fail "cmd_receive joins a thruflux code"
+fi
+# send hosts the archive with its checksum/manifest siblings so the receiver
+# can verify the restore automatically
+if echo "$send_src" | grep -q '\.sha256' && echo "$send_src" | grep -q '\.manifest\.json' && echo "$send_src" | grep -q 'files+=('; then
+    pass "cmd_send hosts the archive with its .sha256/.manifest siblings"
+else
+    fail "cmd_send hosts the archive with its .sha256/.manifest siblings"
+fi
+# receive detects a dero snapshot in the transfer and proposes restoring it
+if echo "$recv_src" | grep -q 'dero-mainnet-\*\.tar\.zst' && echo "$recv_src" | grep -q 'SNAPSHOT_FROM=' && echo "$recv_src" | grep -q 'snapshot_running_on_data_dir'; then
+    pass "cmd_receive detects a received snapshot and proposes restoring it"
+else
+    fail "cmd_receive detects a received snapshot and proposes restoring it"
+fi
+# ...and that offer is interactive-only, with stop/restore/restart handling
+if echo "$recv_src" | grep -q 'snapshot_stdin_tty' && echo "$recv_src" | grep -q 'restore --from' && echo "$recv_src" | grep -q 'stop it, restore the received snapshot, then restart'; then
+    pass "cmd_receive restore offer is interactive-only + stops/restarts the node"
+else
+    fail "cmd_receive restore offer is interactive-only + stops/restarts the node"
 fi
 if grep -q 'thru_install_hint' node.sh && grep -q 'samsungplay/Thruflux' node.sh; then
     pass "send/receive hint at installing thruflux per-OS"

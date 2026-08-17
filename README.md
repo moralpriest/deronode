@@ -68,9 +68,10 @@ deronode uninstall              remove derod + all node data (binary, chain, log
                                  (prompts for confirmation; --yes skips it)
 deronode send [<archive>]        share a snapshot (or any file) with a friend via
                                  thruflux — prints a join code (fast, encrypted QUIC
-                                 P2P); defaults to the newest snapshot
+                                 P2P); defaults to the newest snapshot (menu option 14)
                                  (thruflux CLI: https://github.com/samsungplay/Thruflux)
-deronode receive <code>          receive a thruflux transfer into --out (default .)
+deronode receive <code>          receive a thruflux transfer into --out (default .);
+                                 menu option 15 prompts for the join code instead
 deronode --reconfigure          re-run the first-run prompts (incl. data-dir / log-dir)
 deronode --dry-run              resolve nothing; print the derod command line
 deronode --help                 full flag reference
@@ -188,7 +189,20 @@ capacity you can self-host the signaling server (`thru server`).
 deronode send                     # newest snapshot -> join code to share
 deronode send /path/to/file.bin   # any file, same flow
 deronode receive ABCDEFGH         # friend side; files land in ./ (or --out <dir>)
+                                   # also menu option 15 — it asks for the join code
 ```
+
+`deronode send` hosts the snapshot's `.sha256` and `.manifest.json` alongside
+the archive (thruflux supports any number of files in one session), so the
+receiver gets everything in a single transfer and the checksum verifies
+automatically. After `deronode receive` completes, an interactive run
+detects a deronode snapshot (`dero-mainnet-*.tar.zst`) in the received files
+and asks to restore it right away: if derod is running it offers to stop it,
+restore, then restart (mirroring the snapshot flow); if the node is already
+stopped it runs the normal restore confirmation and offers to start it
+afterwards. Piped/scripted runs never touch the node — they print the
+received snapshot name and the `deronode restore --from <path>` command to
+run later.
 
 `thru` must be installed once per machine. When it's missing, deronode asks
 **"Install thruflux now?"** (default yes) and downloads the static binary

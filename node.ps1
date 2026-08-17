@@ -306,6 +306,7 @@ function Show-Menu {
         Write-Host '  12) View node logs (tail -f)'
         Write-Host '  13) Uninstall: remove derod + all node data (keep deronode)'
         Write-Host '  14) Send snapshot to a friend (thruflux)'
+        Write-Host '  15) Receive snapshot from a friend (thruflux)'
         Write-Host '  q) Quit'
         $a = Read-Ask 'Choose' ''
         switch ($a) {
@@ -331,6 +332,16 @@ function Show-Menu {
             '12' { $script:Action = 'logs'; return }
             '13' { $script:Action = 'uninstall'; return }
             '14' { $script:Action = 'send'; return }
+            '15' {
+                Write-Host '    Enter the join code your friend shared:'
+                $code = Read-Ask 'Join code' ''
+                if ($code) {
+                    $script:ReceiveCode = $code
+                    $script:Action = 'receive'
+                    return
+                }
+                Write-Host '[x] No join code entered' -ForegroundColor Red
+            }
             'q' { exit 0 }
             default { Write-Host '[x] Unknown choice' -ForegroundColor Red }
         }
@@ -854,14 +865,20 @@ function Send-Snapshot {
         Write-Host "[x] file not found: $archive" -ForegroundColor Red
         exit 1
     }
+    # Host the archive together with its .sha256 / .manifest.json siblings
+    # (when present) so the receiver can verify the restore automatically —
+    # thruflux supports any number of files in one host session.
+    $hostArgs = @($archive)
+    if (Test-Path "$archive.sha256") { $hostArgs += "$archive.sha256" }
+    if (Test-Path "$archive.manifest.json") { $hostArgs += "$archive.manifest.json" }
     if ($script:DryRun) {
-        Write-Host "[*] dry-run: would run: thru host $archive" -ForegroundColor DarkCyan
+        Write-Host "[*] dry-run: would run: thru host $($hostArgs -join ' ')" -ForegroundColor DarkCyan
         Write-Host '[*] your friend then runs: thru join <code> --out <dir>  (or: deronode receive <code>)' -ForegroundColor DarkCyan
         return
     }
     if (-not (Ensure-Thruflux)) { exit 1 }
-    Write-Host "[*] hosting $archive - share the join code with your friend" -ForegroundColor DarkCyan
-    & thru host $archive
+    Write-Host "[*] hosting $($hostArgs -join ' ') - share the join code with your friend" -ForegroundColor DarkCyan
+    & thru host @hostArgs
 }
 
 # Receive-Snapshot — receive a thruflux transfer from a friend: `thru join
@@ -871,14 +888,54 @@ function Receive-Snapshot {
         Write-Host '[x] usage: deronode receive <code> [--out <dir>]' -ForegroundColor Red
         exit 1
     }
+    $out = if ($script:SnapshotOut) { $script:SnapshotOut } else { '.' }
     if ($script:DryRun) {
-        $out = if ($script:SnapshotOut) { $script:SnapshotOut } else { '.' }
         Write-Host "[*] dry-run: would run: thru join $($script:ReceiveCode) --out $out" -ForegroundColor DarkCyan
         return
     }
     if (-not (Ensure-Thruflux)) { exit 1 }
-    $out = if ($script:SnapshotOut) { $script:SnapshotOut } else { '.' }
     & thru join $script:ReceiveCode --out $out
+    if ($LASTEXITCODE -ne 0) { exit 1 }
+
+    # Integrated restore: if the transfer carried a deronode snapshot
+    # (dero-mainnet-*.tar.zst, with its .sha256/.manifest siblings when the
+    # sender used `deronode send`), propose restoring it right away —
+    # mirroring Invoke-Snapshot's stop/restore/restart flow. Interactive only,
+    # so piped/scripted runs never touch the node.
+    $received = Get-ChildItem -Path $out -Filter 'dero-mainnet-*.tar.zst' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if (-not $received) {
+        Write-Host "[*] transfer complete - saved to $out (not a deronode snapshot, nothing to restore)." -ForegroundColor DarkGray
+        return
+    }
+    if (-not (Test-StdinInteractive)) {
+        Write-Host "[*] received snapshot: $(Split-Path -Leaf $received.FullName) - restore it with: deronode restore --from $($received.FullName)" -ForegroundColor DarkCyan
+        return
+    }
+    Resolve-Paths
+    $script:SnapshotFrom = $received.FullName
+    if (-not (Test-SnapshotRunningOnDataDir)) {
+        # Node is stopped: reuse the normal restore flow (confirm, restore,
+        # then offer to start the node).
+        Invoke-Restore
+        return
+    }
+    if (-not (Read-YesNo "derod is running on $($script:DataDirReal) - stop it, restore the received snapshot, then restart?" 'y')) {
+        Write-Host "[*] received snapshot saved to $($received.FullName) - restore it later with: deronode restore --from $($received.FullName)" -ForegroundColor DarkCyan
+        return
+    }
+    Write-Host '[*] stopping derod...' -ForegroundColor DarkCyan
+    Stop-Node
+    # The user just confirmed the stop+restore, so skip restore's second
+    # confirm and the no-.sha256 wall; sha256 verification failures still abort.
+    $script:SnapshotYes = $true
+    if (-not (Restore-Snapshot)) {
+        Write-Host '[*] restarting derod...' -ForegroundColor DarkCyan
+        if (Test-ExternalInstalled) { Start-ExternalNode } else { Install-Service }
+        exit 1
+    }
+    Write-Host '[*] restarting derod...' -ForegroundColor DarkCyan
+    if (Test-ExternalInstalled) { Start-ExternalNode } else { Install-Service }
 }
 
 function Invoke-Snapshot {

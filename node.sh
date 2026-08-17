@@ -341,6 +341,7 @@ menu() {
         echo "  ${C_BOLD}12)${C_RESET} View node logs (tail -f)"
         echo "  ${C_BOLD}13)${C_RESET} Uninstall: remove derod + all node data (keep deronode)"
         echo "  ${C_BOLD}14)${C_RESET} Send snapshot to a friend (thruflux)"
+        echo "  ${C_BOLD}15)${C_RESET} Receive snapshot from a friend (thruflux)"
         echo "  ${C_BOLD}q)${C_RESET} Quit"
         local a
         ask a "Choose" ""
@@ -367,6 +368,14 @@ menu() {
             12) ACTION=logs; return ;;
             13) ACTION=uninstall; return ;;
             14) ACTION=send; return ;;
+            15) echo "    Enter the join code your friend shared:"
+                ask code "Join code" ""
+                if [ -n "$code" ]; then
+                    RECEIVE_CODE="$code"
+                    ACTION=receive; return
+                fi
+                echo "${C_ERR}[x] No join code entered${C_RESET}" >&2
+                ;;
             q|Q) exit 0 ;;
             *) echo "${C_ERR}[x] Unknown choice${C_RESET}" >&2 ;;
         esac
@@ -899,14 +908,20 @@ cmd_send() {
         echo "${C_ERR}[x] file not found: $archive${C_RESET}" >&2
         return 1
     fi
+    # Host the archive together with its .sha256 / .manifest.json siblings
+    # (when present) so the receiver can verify the restore automatically —
+    # thruflux supports any number of files in one host session.
+    local -a files=("$archive")
+    [ -f "$archive.sha256" ] && files+=("$archive.sha256")
+    [ -f "$archive.manifest.json" ] && files+=("$archive.manifest.json")
     if $DRY_RUN; then
-        echo "${C_INFO}[*] dry-run: would run: thru host $archive${C_RESET}"
+        echo "${C_INFO}[*] dry-run: would run: thru host ${files[*]}${C_RESET}"
         echo "${C_INFO}[*] your friend then runs: thru join <code> --out <dir>  (or: deronode receive <code>)${C_RESET}"
         return 0
     fi
     thru_ensure || return 1
-    echo "${C_INFO}[*] hosting $archive — share the join code with your friend${C_RESET}" >&2
-    thru host "$archive"
+    echo "${C_INFO}[*] hosting ${files[*]} — share the join code with your friend${C_RESET}" >&2
+    thru host "${files[@]}"
 }
 
 # cmd_receive — receive a thruflux transfer from a friend: `thru join <code>`
@@ -921,7 +936,48 @@ cmd_receive() {
         return 0
     fi
     thru_ensure || return 1
-    thru join "$RECEIVE_CODE" --out "${SNAPSHOT_OUT:-.}"
+    local out="${SNAPSHOT_OUT:-.}"
+    thru join "$RECEIVE_CODE" --out "$out" || return 1
+
+    # Integrated restore: if the transfer carried a deronode snapshot
+    # (dero-mainnet-*.tar.zst, with its .sha256/.manifest siblings when the
+    # sender used `deronode send`), propose restoring it right away —
+    # mirroring cmd_snapshot's stop/restore/restart flow. Interactive only,
+    # so piped/scripted runs never touch the node.
+    local received
+    received="$(ls -1t "$out"/dero-mainnet-*.tar.zst 2>/dev/null | head -1)"
+    if [ -z "$received" ]; then
+        echo "${C_MUTE}[*] transfer complete — saved to $out (not a deronode snapshot, nothing to restore).${C_RESET}"
+        return 0
+    fi
+    if ! snapshot_stdin_tty; then
+        echo "${C_INFO}[*] received snapshot: $(basename "$received") — restore it with: deronode restore --from \"$received\"${C_RESET}"
+        return 0
+    fi
+    resolve_paths
+    SNAPSHOT_FROM="$received"
+    if ! snapshot_running_on_data_dir; then
+        # Node is stopped: reuse the normal restore flow (confirm, restore,
+        # then offer to start the node).
+        cmd_restore
+        return $?
+    fi
+    if [ "$(yesno "derod is running on $DATA_DIR_REAL — stop it, restore the received snapshot, then restart?" y)" != "y" ]; then
+        echo "${C_INFO}[*] received snapshot saved to $received — restore it later with: deronode restore --from \"$received\"${C_RESET}"
+        return 0
+    fi
+    echo "${C_INFO}[*] stopping derod...${C_RESET}"
+    cmd_stop || exit 1
+    # The user just confirmed the stop+restore, so skip restore's second
+    # confirm and the no-.sha256 wall; sha256 verification failures still abort.
+    SNAPSHOT_YES=true
+    if ! snapshot_restore; then
+        echo "${C_INFO}[*] restarting derod...${C_RESET}"
+        node_is_external && external_start || service_install
+        return 1
+    fi
+    echo "${C_INFO}[*] restarting derod...${C_RESET}"
+    if node_is_external; then external_start; else service_install; fi
 }
 
 cmd_snapshot() {

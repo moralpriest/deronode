@@ -13,8 +13,8 @@ explicitly stop it first.
 cd ~/Projects/deronode
 
 # Full smoke suites — self-contained, wipe and recreate their own bin/
-bash scripts/smoke-test.sh              # expect: 189 passed, 0 failed
-pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 161 passed, 0 failed
+bash scripts/smoke-test.sh              # expect: 193 passed, 0 failed
+pwsh -NoProfile -File scripts/smoke-test.ps1   # expect: 165 passed, 0 failed
 
 # Dry-run — offline proof: prints the exact derod argv, writes nothing
 bash node.sh --dry-run --sync-profile=pruned --data-dir=/tmp/d1 --log-dir=/tmp/d2
@@ -274,7 +274,8 @@ bash node.sh status                     # "No derod installed yet" first-run men
 
 Send/receive (thruflux): `deronode send [<archive>]` (menu option 14) hosts
 the newest snapshot — or an explicit path — via `thru host`, printing a join
-code the friend uses with `thru join <code>` (or `deronode receive <code>`).
+code the friend uses with `thru join <code>` (or `deronode receive <code>`,
+menu option 15 — which prompts for the join code).
 Thruflux is a peer-to-peer QUIC transfer CLI (encrypted streams, ICE NAT
 traversal with TURN fallback, self-hostable signaling server); deronode only
 shells out to it. When `thru` is missing, an interactive run is asked
@@ -287,6 +288,17 @@ binaries live at the working `raw.githubusercontent.com/.../main/...`
 equivalent. `--dry-run` prints the exact `thru host` / `thru join` argv
 without transferring anything. (Sections 14 bash / 9 ps cover the wiring +
 install prompt.)
+
+`deronode send` also hosts the snapshot's `.sha256` / `.manifest.json`
+siblings in the same thruflux session, so the receiver can verify the
+restore automatically. After `thru join` completes, an interactive
+`deronode receive` scans the out dir for `dero-mainnet-*.tar.zst` and
+proposes restoring it — offering stop → restore → restart when derod is
+running on the data dir, otherwise reusing the normal restore flow with the
+received archive and offering to start the node afterwards. Scripted runs
+never touch the node: they print the received snapshot name and the
+`deronode restore --from <path>` command. (Sections 14 bash / 9 ps cover the
+sibling-hosting + receive-restore greps.)
 
 Manual smoke against the real (stopped) node:
 
