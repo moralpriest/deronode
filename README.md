@@ -128,13 +128,16 @@ First-run setup asks a **run mode** question — `1) Background system service`
 service on any OS without needing to remember `--service`. Answering `1`
 installs and starts a systemd user unit on Linux, a LaunchAgent on macOS, or a
 background process on Windows; `2` runs in the terminal. The same question is
-re-asked by `--reconfigure`/menu option 8. After the first-run download+install
-finishes, it asks **"Bootstrap the chain"** — choose between a fresh sync from
-genesis (fastsync), restoring from a local snapshot (`.tar.zst`), or receiving
-a snapshot via thruflux (join code). A fresh sync then asks **"Start the node
-now?"** before launching (piped/scripted runs skip the prompt). On Windows the
-binary is `derod.exe` — an extensionless file can't be executed there and would
-pop the "How do you want to open this file?" dialog instead of starting the node.
+re-asked by `--reconfigure`/menu option 8. The first-run screen then asks how
+to install derod: `[1] download the latest release` or `[2] compile the
+community-dev branch from source` (Go required). After install finishes, it
+asks **"Bootstrap the chain"** — choose between fast sync (fastsync — pulls
+recent state snapshots from peers, not a genesis replay), restoring from a
+local snapshot (`.tar.zst`), or receiving a snapshot via thruflux (join code).
+A fast sync then asks **"Start the node now?"** before launching
+(piped/scripted runs skip the prompt). On Windows the binary is `derod.exe` —
+an extensionless file can't be executed there and would pop the "How do you
+want to open this file?" dialog instead of starting the node.
 
 ### Snapshots
 

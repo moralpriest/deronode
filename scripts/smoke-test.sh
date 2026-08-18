@@ -716,19 +716,35 @@ menu_src="$(sed -n '/^menu()/,/^}/p' node.sh)"
 echo "$menu_src" | grep -q '8) ACTION=reconfigure' && pass "menu option 8 sets ACTION=reconfigure" || fail "menu option 8 sets ACTION=reconfigure"
 entry_src="$(sed -n '/^case "\$ACTION" in/,$p' node.sh)"
 echo "$entry_src" | grep -q 'reconfigure) cmd_reconfigure ;;' && pass "post-menu case dispatches reconfigure" || fail "post-menu case dispatches reconfigure"
-# first-run install (menu option 1 with no derod): asks to start the node,
-# then continues into start on yes
+# first-run install (menu option 1/2 with no derod): offers download and
+# compile paths, both route through first_run_post_install
 first_run="$(sed -n '/^menu()/,/^}/p' node.sh)"
-if echo "$first_run" | grep -q 'No derod installed yet' && echo "$first_run" | grep -q 'ensure_binary; then' && echo "$first_run" | grep -q 'Start the node now' && echo "$first_run" | grep -q 'ACTION=start'; then
-    pass "first-run install prompts to start the node, then continues into start"
+if echo "$first_run" | grep -q 'No derod installed yet' \
+   && echo "$first_run" | grep -q 'Configure & install derod (download latest release)' \
+   && echo "$first_run" | grep -q 'Configure & build derod (compile community-dev' \
+   && echo "$first_run" | grep -q 'ensure_binary || exit 1' \
+   && echo "$first_run" | grep -q 'build_derod_from_source || exit 1' \
+   && echo "$first_run" | grep -q 'first_run_post_install'; then
+    pass "first-run install offers download and compile paths, both route to post-install prompt"
 else
-    fail "first-run install prompts to start the node, then continues into start"
+    fail "first-run install offers download and compile paths, both route to post-install prompt"
 fi
-# first-run install offers bootstrap choice: fresh sync / restore file / thruflux receive
-if echo "$first_run" | grep -q 'Fresh sync from genesis' && echo "$first_run" | grep -q 'Restore from a snapshot' && echo "$first_run" | grep -q 'Receive a snapshot via thruflux' && echo "$first_run" | grep -q 'ACTION=restore' && echo "$first_run" | grep -q 'ACTION=receive'; then
-    pass "first-run install offers bootstrap choice (fresh / restore / receive)"
+# first-run install offers bootstrap choice: fast sync / restore file / thruflux receive
+first_run_helper="$(sed -n '/^first_run_post_install()/,/^}/p' node.sh)"
+if echo "$first_run_helper" | grep -q 'Fast sync' \
+   && echo "$first_run_helper" | grep -q 'Restore from a snapshot' \
+   && echo "$first_run_helper" | grep -q 'Receive a snapshot via thruflux' \
+   && echo "$first_run_helper" | grep -q 'ACTION=restore' \
+   && echo "$first_run_helper" | grep -q 'ACTION=receive'; then
+    pass "first-run bootstrap choice offers fast sync / restore / receive"
 else
-    fail "first-run install offers bootstrap choice (fresh / restore / receive)"
+    fail "first-run bootstrap choice offers fast sync / restore / receive"
+fi
+# first-run build path checks for Go toolchain before building
+if echo "$first_run" | grep -q 'have_go'; then
+    pass "first-run build option checks for Go toolchain"
+else
+    fail "first-run build option checks for Go toolchain"
 fi
 # first-run install honors the configure run-mode answer (service vs foreground)
 cfg_src="$(sed -n '/^configure()/,/^}/p' node.sh)"
@@ -737,10 +753,11 @@ if echo "$cfg_src" | grep -q 'Background system service' && echo "$cfg_src" | gr
 else
     fail "configure offers system-service install (run mode question)"
 fi
-# The first-run branch (before the menu's while loop) sets ACTION=start and
-# never ASSIGNS AS_SERVICE, so the configure answer survives into cmd_start.
-first_run_branch="$(echo "$first_run" | sed -n '1,/while true/p')"
-if echo "$first_run_branch" | grep -q 'ACTION=start' && ! echo "$first_run_branch" | grep -q 'AS_SERVICE='; then
+# The first-run branch calls first_run_post_install which sets ACTION=start
+# and never ASSIGNS AS_SERVICE, so the configure answer survives into cmd_start.
+if echo "$first_run" | grep -q 'first_run_post_install' \
+   && echo "$first_run_helper" | grep -q 'ACTION=start' \
+   && ! echo "$first_run_helper" | grep -q 'AS_SERVICE='; then
     pass "first-run install keeps configure's service/foreground choice"
 else
     fail "first-run install keeps configure's service/foreground choice"

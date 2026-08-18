@@ -261,6 +261,43 @@ function Configure {
     Write-Host "[*] Saved $($script:ConfigFile)" -ForegroundColor Green
 }
 
+# Invoke-FirstRunPostInstall — shared by the download and build paths on
+# first run: offers a bootstrap choice (fast sync, restore from file, receive
+# via thruflux), then confirms whether to start the node.
+function Invoke-FirstRunPostInstall {
+    if (Test-StdinInteractive) {
+        Write-Host '  Bootstrap the chain:'
+        Write-Host '    1) Fast sync (fastsync — recent state snapshots, not genesis)'
+        Write-Host '    2) Restore from a snapshot (.tar.zst)'
+        Write-Host '    3) Receive a snapshot via thruflux (join code)'
+        $pick = Read-Ask 'Choose' '1'
+        switch ($pick) {
+            '2' {
+                $file = Read-Ask 'Snapshot file path' ''
+                if ($file) {
+                    $script:SnapshotFrom = $file
+                    $script:Action = 'restore'
+                    return
+                }
+                Write-Host '[!] no file — falling back to fresh sync' -ForegroundColor Yellow
+            }
+            '3' {
+                $code = Read-Ask 'Join code' ''
+                if ($code) {
+                    $script:ReceiveCode = $code
+                    $script:Action = 'receive'
+                    return
+                }
+                Write-Host '[!] no code — falling back to fresh sync' -ForegroundColor Yellow
+            }
+        }
+    }
+    if ((Test-StdinInteractive) -and -not (Read-YesNo 'derod installed. Start the node now?' 'y')) {
+        return   # back to the menu — the binary now exists, full menu shows
+    }
+    $script:Action = 'start'
+}
+
 function Ensure-Binary {
     if (-not (Resolve-Release $script:Platform)) { return $false }
     if (Test-CacheFresh) { return $true }
@@ -272,47 +309,23 @@ function Show-Menu {
     if (-not (Test-Path $script:BinaryPath) -and -not (Test-NodeRunning) -and -not (Test-ExternalInstalled)) {
         Write-Host '  No derod installed yet.'
         Write-Host ''
-        Write-Host '  [1] Configure & install derod'
+        Write-Host '  [1] Configure & install derod (download latest release)'
+        Write-Host '  [2] Configure & build derod (compile community-dev, Go required)'
         Write-Host '  [q] Quit'
         $a = Read-Ask 'Choose' '1'
         if ($a -eq '1' -or $a -eq '') {
             if (-not (Test-Path $script:ConfigFile)) { Configure }
             if (-not (Ensure-Binary)) { exit 1 }
-            if (Test-StdinInteractive) {
-                Write-Host '  Bootstrap the chain:'
-                Write-Host '    1) Fresh sync from genesis (fastsync)'
-                Write-Host '    2) Restore from a snapshot (.tar.zst)'
-                Write-Host '    3) Receive a snapshot via thruflux (join code)'
-                $pick = Read-Ask 'Choose' '1'
-                switch ($pick) {
-                    '2' {
-                        $file = Read-Ask 'Snapshot file path' ''
-                        if ($file) {
-                            $script:SnapshotFrom = $file
-                            $script:Action = 'restore'
-                            return
-                        }
-                        Write-Host '[!] no file — falling back to fresh sync' -ForegroundColor Yellow
-                    }
-                    '3' {
-                        $code = Read-Ask 'Join code' ''
-                        if ($code) {
-                            $script:ReceiveCode = $code
-                            $script:Action = 'receive'
-                            return
-                        }
-                        Write-Host '[!] no code — falling back to fresh sync' -ForegroundColor Yellow
-                    }
-                }
+            Invoke-FirstRunPostInstall
+            return
+        } elseif ($a -eq '2') {
+            if (-not (Test-Path $script:ConfigFile)) { Configure }
+            if (-not (Test-GoAvailable)) {
+                Write-Host '[x] Go toolchain not found - install Go 1.17+ (https://go.dev/dl/) to build derod from source.' -ForegroundColor Red
+                exit 1
             }
-            # The install just finished — confirm the user actually wants the
-            # node started now (interactive only; scripted runs auto-continue).
-            # The run-mode answer from Configure (service vs foreground) is
-            # honored via $script:AsService, so don't reset it here.
-            if ((Test-StdinInteractive) -and -not (Read-YesNo 'derod installed. Start the node now?' 'y')) {
-                return   # back to the menu — the binary now exists, full menu shows
-            }
-            $script:Action = 'start'
+            if (-not (Invoke-BuildDerodFromSource)) { exit 1 }
+            Invoke-FirstRunPostInstall
             return
         } else { exit 0 }
     }

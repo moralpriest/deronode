@@ -294,55 +294,73 @@ configure() {
     echo "${C_OK}[*] Saved $CONFIG_FILE${C_RESET}"
 }
 
+# ── First-run post-install prompt ──
+# Shared by the download and build paths: offers a bootstrap choice (fast sync,
+# restore from file, receive via thruflux), then confirms whether to start the
+# node.  Called only on first run when the binary didn't exist before.
+first_run_post_install() {
+    # Interactive only: choose how to get the chain data (fastsync pulls
+    # recent state snapshots — NOT a genesis replay; full/archival sync
+    # replays from genesis).
+    if [ -t 0 ]; then
+        echo "  Bootstrap the chain:"
+        echo "    1) Fast sync (fastsync — recent state snapshots, not genesis)"
+        echo "    2) Restore from a snapshot (.tar.zst)"
+        echo "    3) Receive a snapshot via thruflux (join code)"
+        local pick
+        ask pick "Choose" "1"
+        case "$pick" in
+            2)
+                ask SNAPSHOT_FROM "Snapshot file path" ""
+                if [ -n "$SNAPSHOT_FROM" ]; then
+                    ACTION=restore
+                    return
+                fi
+                echo "${C_WARN}[!] no file — falling back to fresh sync${C_RESET}"
+                ;;
+            3)
+                ask RECEIVE_CODE "Join code" ""
+                if [ -n "$RECEIVE_CODE" ]; then
+                    ACTION=receive
+                    return
+                fi
+                echo "${C_WARN}[!] no code — falling back to fresh sync${C_RESET}"
+                ;;
+        esac
+    fi
+    if [ -t 0 ] && [ "$(yesno "derod installed. Start the node now?" y)" != "y" ]; then
+        return   # back to the menu — the binary now exists, full menu shows
+    fi
+    ACTION=start
+}
+
 # ── Menu ──
 menu() {
     draw_banner
     if [ ! -f "$BINARY_PATH" ] && ! node_running && ! external_installed; then
         echo "  No derod installed yet."
         echo ""
-        echo "  [1] Configure & install derod"
+        echo "  [1] Configure & install derod (download latest release)"
+        echo "  [2] Configure & build derod (compile community-dev, Go required)"
         echo "  [q] Quit"
         local a
         ask a "Choose" "1"
         case "$a" in
             1|"")
                 [ -f "$CONFIG_FILE" ] || configure
-                # The install just finished — confirm the user actually wants
-                # the node started now (interactive only; scripted runs
-                # auto-continue). The configure run-mode answer (service vs
-                # foreground) is honored via AS_SERVICE.
-                if ensure_binary; then
-                    if [ -t 0 ]; then
-                        echo "  Bootstrap the chain:"
-                        echo "    1) Fresh sync from genesis (fastsync)"
-                        echo "    2) Restore from a snapshot (.tar.zst)"
-                        echo "    3) Receive a snapshot via thruflux (join code)"
-                        local pick
-                        ask pick "Choose" "1"
-                        case "$pick" in
-                            2)
-                                ask SNAPSHOT_FROM "Snapshot file path" ""
-                                if [ -n "$SNAPSHOT_FROM" ]; then
-                                    ACTION=restore; return
-                                fi
-                                echo "${C_WARN}[!] no file — falling back to fresh sync${C_RESET}"
-                                ;;
-                            3)
-                                ask RECEIVE_CODE "Join code" ""
-                                if [ -n "$RECEIVE_CODE" ]; then
-                                    ACTION=receive; return
-                                fi
-                                echo "${C_WARN}[!] no code — falling back to fresh sync${C_RESET}"
-                                ;;
-                        esac
-                    fi
-                    if [ -t 0 ] && [ "$(yesno "derod installed. Start the node now?" y)" != "y" ]; then
-                        return   # back to the menu — the binary now exists, full menu shows
-                    fi
-                    ACTION=start
-                    return
+                ensure_binary || exit 1
+                first_run_post_install
+                return
+                ;;
+            2)
+                [ -f "$CONFIG_FILE" ] || configure
+                if ! have_go; then
+                    echo "${C_ERR}[x] Go toolchain not found — install Go 1.17+ (https://go.dev/dl/) to build derod from source.${C_RESET}" >&2
+                    exit 1
                 fi
-                exit 1
+                build_derod_from_source || exit 1
+                first_run_post_install
+                return
                 ;;
             *) exit 0 ;;
         esac
