@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-DERONODE_VERSION="1.4.0"
+DERONODE_VERSION="1.4.1"
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$PROJECT_DIR/lib"
