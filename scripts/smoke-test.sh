@@ -391,15 +391,19 @@ if snapshot_pack >/dev/null 2>&1; then pass "snapshot --keep-running overrides g
 SNAPSHOT_KEEP_RUNNING=false
 rm -f "$PROJECT_DIR/derod.pid"
 # restore into a fresh dir (stub the broad "any derod" guard: the live node is up)
+# snapshot_chain_dir resolves to $base/mainnet (derod's actual data dir), so the
+# fixture must pre-create mainnet/ for the .bak branch to fire.
 SNAPREST="$(mktemp -d)"
+mkdir -p "$SNAPREST/mainnet"
+printf 'stale' > "$SNAPREST/mainnet/topo.map"
 DATA_DIR_REAL="$SNAPREST"
 SNAPSHOT_YES=true
 SNAPSHOT_FROM="$SNAPARCH"
 snapshot_any_derod_running() { return 1; }
 if snapshot_restore >/dev/null 2>&1; then pass "restore runs offline"; else fail "restore runs offline"; fi
-[ -f "$SNAPREST/balances/ab/x1" ] && [ -f "$SNAPREST/bltx_store/b1/y1" ] && [ -f "$SNAPREST/topo.map" ] && pass "restore reproduces includes" || fail "restore reproduces includes"
-[ ! -e "$SNAPREST/peers.json" ] && [ ! -e "$SNAPREST/config.json" ] && pass "restore omits decoys" || fail "restore omits decoys"
-[ -n "$(ls -d "$SNAPREST".bak-* 2>/dev/null | head -1)" ] && pass "restore keeps .bak" || fail "restore keeps .bak"
+[ -f "$SNAPREST/mainnet/balances/ab/x1" ] && [ -f "$SNAPREST/mainnet/bltx_store/b1/y1" ] && [ -f "$SNAPREST/mainnet/topo.map" ] && pass "restore reproduces includes" || fail "restore reproduces includes"
+[ ! -e "$SNAPREST/mainnet/peers.json" ] && [ ! -e "$SNAPREST/mainnet/config.json" ] && pass "restore omits decoys" || fail "restore omits decoys"
+[ -n "$(ls -d "$SNAPREST/mainnet.bak-"* 2>/dev/null | head -1)" ] && pass "restore keeps .bak" || fail "restore keeps .bak"
 # restore without --from auto-picks the latest snapshot
 SNAPLAT="$(mktemp -d)"
 mkdir -p "$SNAPLAT/balances/ab" "$SNAPLAT/bltx_store/b1"
@@ -420,7 +424,7 @@ mkdir -p "$SNAPSHOT_DIR"
 if snapshot_restore >/tmp/snapempty.out 2>&1; then fail "restore with empty snapshot dir refuses"; else pass "restore with empty snapshot dir refuses"; fi
 grep -q 'no snapshot found' /tmp/snapempty.out && pass "empty snapshot dir error is clear" || fail "empty snapshot dir error is clear"
 SNAPSHOT_DIR=""
-rm -rf "$SNAPLAT" "$SNAPLAT".bak-* "$EMPTYDIR" "$EMPTYDIR".bak-*; rm -f /tmp/snaprest.out /tmp/snapempty.out
+rm -rf "$SNAPREST" "$SNAPREST".bak-* "$SNAPLAT" "$SNAPLAT".bak-* "$EMPTYDIR" "$EMPTYDIR".bak-*; rm -f /tmp/snaprest.out /tmp/snapempty.out
 if grep -q 'tar --zstd' "$LIB_DIR/snapshot.sh" && grep -q 'rargz --extract' "$LIB_DIR/snapshot.sh"; then pass "restore falls back to tar, rargz optional"; else fail "restore falls back to tar, rargz optional"; fi
 # external data-dir resolution (stub unit files)
 EXTUNIT="$(mktemp)"
@@ -455,7 +459,7 @@ c="$(snapshot_chain_dir)"
 [ "$c" = "$EXTSNAP/node/mainnet" ] && pass "snapshot_chain_dir resolves external data dir" || fail "snapshot_chain_dir resolves external data dir (got '$c')"
 external_installed() { return 1; }
 c="$(snapshot_chain_dir)"
-[ "$c" = "$DATA_DIR_REAL" ] && pass "snapshot_chain_dir falls back to DATA_DIR_REAL" || fail "snapshot_chain_dir falls back to DATA_DIR_REAL (got '$c')"
+[ "$c" = "$DATA_DIR_REAL/mainnet" ] && pass "snapshot_chain_dir falls back to DATA_DIR_REAL/mainnet" || fail "snapshot_chain_dir falls back to DATA_DIR_REAL/mainnet (got '$c')"
 # missing-member pre-check fails clearly (external_installed stays stubbed off)
 INCOMPLETE="$(mktemp -d)"
 mkdir -p "$INCOMPLETE/balances/ab"

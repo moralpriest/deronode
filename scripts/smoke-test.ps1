@@ -243,16 +243,20 @@ if (New-Snapshot) { Pass 'snapshot --keep-running overrides guard' } else { Fail
 $script:SnapshotKeepRunning = $false
 Remove-Item (Join-Path $script:InstallDir 'derod.pid') -Force -ErrorAction SilentlyContinue
 # restore into a fresh dir (stub the broad "any derod" guard: the live node is up)
+# snapshot_chain_dir resolves to $base/mainnet (derod's actual data dir), so the
+# fixture must pre-create mainnet/ for the .bak branch to fire.
 function Test-AnyDerodRunning { return $false }
 $snapRest = Join-Path $snapFix 'restore'
-New-Item -ItemType Directory -Path $snapRest -Force | Out-Null
+$restMainnet = Join-Path $snapRest 'mainnet'
+New-Item -ItemType Directory -Path $restMainnet -Force | Out-Null
+Set-Content (Join-Path $restMainnet 'topo.map') 'stale' -NoNewline
 $script:DataDirReal = $snapRest
 $script:SnapshotYes = $true
 $script:SnapshotFrom = $snapArch.FullName
 if (Restore-Snapshot) { Pass 'restore runs offline' } else { Fail 'restore runs offline' }
-if ((Test-Path (Join-Path $snapRest 'balances/ab/x1')) -and (Test-Path (Join-Path $snapRest 'bltx_store/b1/y1')) -and (Test-Path (Join-Path $snapRest 'topo.map'))) { Pass 'restore reproduces includes' } else { Fail 'restore reproduces includes' }
-if (-not (Test-Path (Join-Path $snapRest 'peers.json')) -and -not (Test-Path (Join-Path $snapRest 'config.json'))) { Pass 'restore omits decoys' } else { Fail 'restore omits decoys' }
-if (Get-ChildItem "$snapRest.bak-*" -ErrorAction SilentlyContinue) { Pass 'restore keeps .bak' } else { Fail 'restore keeps .bak' }
+if ((Test-Path (Join-Path $restMainnet 'balances/ab/x1')) -and (Test-Path (Join-Path $restMainnet 'bltx_store/b1/y1')) -and (Test-Path (Join-Path $restMainnet 'topo.map'))) { Pass 'restore reproduces includes' } else { Fail 'restore reproduces includes' }
+if (-not (Test-Path (Join-Path $restMainnet 'peers.json')) -and -not (Test-Path (Join-Path $restMainnet 'config.json'))) { Pass 'restore omits decoys' } else { Fail 'restore omits decoys' }
+if (Get-ChildItem "$restMainnet.bak-*" -ErrorAction SilentlyContinue) { Pass 'restore keeps .bak' } else { Fail 'restore keeps .bak' }
 # restore without --from auto-picks the latest snapshot
 $snapLat = Join-Path $snapFix 'lat'
 New-Item -ItemType Directory -Path (Join-Path $snapLat 'balances/ab'), (Join-Path $snapLat 'bltx_store/b1') -Force | Out-Null
@@ -318,7 +322,8 @@ $c = Get-SnapshotChainDir
 if ($c -eq (Join-Path $snapFix 'extnode/mainnet')) { Pass 'Get-SnapshotChainDir resolves external data dir' } else { Fail "Get-SnapshotChainDir resolves external data dir (got '$c')" }
 function Test-ExternalInstalled { return $false }
 $c = Get-SnapshotChainDir
-if ($c -eq $script:DataDirReal) { Pass 'Get-SnapshotChainDir falls back to DataDirReal' } else { Fail "Get-SnapshotChainDir falls back to DataDirReal (got '$c')" }
+$expected = Join-Path $script:DataDirReal 'mainnet'
+if ($c -eq $expected) { Pass 'Get-SnapshotChainDir falls back to DataDirReal/mainnet' } else { Fail "Get-SnapshotChainDir falls back to DataDirReal/mainnet (got '$c')" }
 # missing-member pre-check fails clearly (external stub stays off)
 $incFix = Join-Path $snapFix 'incomplete'
 New-Item -ItemType Directory -Path (Join-Path $incFix 'balances/ab') -Force | Out-Null

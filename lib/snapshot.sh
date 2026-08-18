@@ -9,10 +9,10 @@
 SNAPSHOT_INCLUDE=(balances bltx_store topo.map)
 SNAPSHOT_EXCLUDE=(peers.json trusted_peers.json ban_list.json config.json config_pool.json)
 
-# Directory that holds the chain state: data_dir/mainnet if it exists, else
-# data_dir itself (flat layout). For an externally-installed derod we resolve
-# the external node's real data dir (its cwd / unit WorkingDirectory) instead of
-# deronode's configured data_dir, which may be an unrelated scaffold.
+# Directory that holds the chain state: data_dir/mainnet (derod always
+# appends the network subdir).  The flat layout (chain state directly in base)
+# only applies when the external unit's data dir already IS the mainnet store
+# (base/topo.map present, no nested mainnet/ subdir).
 snapshot_chain_dir() {
     local base
     if external_installed 2>/dev/null; then
@@ -23,8 +23,10 @@ snapshot_chain_dir() {
     fi
     if [ -d "$base/mainnet" ] && [ -e "$base/mainnet/topo.map" ]; then
         echo "$base/mainnet"
-    else
+    elif [ -e "$base/topo.map" ] && [ ! -d "$base/mainnet" ]; then
         echo "$base"
+    else
+        echo "$base/mainnet"
     fi
 }
 

@@ -13,7 +13,9 @@ function Get-SnapshotChainDir {
     }
     $mn = Join-Path $base 'mainnet'
     if (Test-Path (Join-Path $mn 'topo.map')) { return $mn }
-    return $base
+    $flat = Join-Path $base 'topo.map'
+    if ((Test-Path $flat) -and -not (Test-Path $mn)) { return $base }
+    return $mn
 }
 
 function Get-SnapshotHeight {
