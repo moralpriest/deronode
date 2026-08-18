@@ -1,6 +1,6 @@
 # node.ps1 — deronode runner (PowerShell 7 / 5.1). Mirrors node.sh's CLI.
 
-$script:DeronodeVersion = '1.2.0'
+$script:DeronodeVersion = '1.3.0'
 $script:InstallDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:LibDir = Join-Path $script:InstallDir 'lib'
 $script:BinDir = Join-Path $script:InstallDir 'bin'
