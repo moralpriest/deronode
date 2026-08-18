@@ -312,6 +312,30 @@ menu() {
                 # auto-continue). The configure run-mode answer (service vs
                 # foreground) is honored via AS_SERVICE.
                 if ensure_binary; then
+                    if [ -t 0 ]; then
+                        echo "  Bootstrap the chain:"
+                        echo "    1) Fresh sync from genesis (fastsync)"
+                        echo "    2) Restore from a snapshot (.tar.zst)"
+                        echo "    3) Receive a snapshot via thruflux (join code)"
+                        local pick
+                        ask pick "Choose" "1"
+                        case "$pick" in
+                            2)
+                                ask SNAPSHOT_FROM "Snapshot file path" ""
+                                if [ -n "$SNAPSHOT_FROM" ]; then
+                                    ACTION=restore; return
+                                fi
+                                echo "${C_WARN}[!] no file — falling back to fresh sync${C_RESET}"
+                                ;;
+                            3)
+                                ask RECEIVE_CODE "Join code" ""
+                                if [ -n "$RECEIVE_CODE" ]; then
+                                    ACTION=receive; return
+                                fi
+                                echo "${C_WARN}[!] no code — falling back to fresh sync${C_RESET}"
+                                ;;
+                        esac
+                    fi
                     if [ -t 0 ] && [ "$(yesno "derod installed. Start the node now?" y)" != "y" ]; then
                         return   # back to the menu — the binary now exists, full menu shows
                     fi

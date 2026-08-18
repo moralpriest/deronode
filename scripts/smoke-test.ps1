@@ -385,6 +385,8 @@ $menuSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($menuSrc -match '''8'' \{ \$script:Action = ''reconfigure''; return \}') { Pass "menu option 8 sets Action=reconfigure" } else { Fail "menu option 8 sets Action=reconfigure" }
 if ($menuSrc -match "'reconfigure' \{ Reconfigure-Node \}") { Pass "post-menu switch dispatches reconfigure" } else { Fail "post-menu switch dispatches reconfigure" }
 if ($menuSrc -match 'No derod installed yet' -and $menuSrc -match 'Ensure-Binary' -and $menuSrc -match "Read-YesNo 'derod installed\. Start the node now\?'" -and $menuSrc -match "\$script:Action = 'start'") { Pass 'first-run install prompts to start the node, then continues into start' } else { Fail 'first-run install prompts to start the node, then continues into start' }
+# first-run install offers bootstrap choice: fresh sync / restore file / thruflux receive
+if ($menuSrc -match 'Fresh sync from genesis' -and $menuSrc -match 'Restore from a snapshot' -and $menuSrc -match 'Receive a snapshot via thruflux' -and $menuSrc -match "\$script:Action = 'restore'" -and $menuSrc -match "\$script:Action = 'receive'") { Pass 'first-run install offers bootstrap choice (fresh / restore / receive)' } else { Fail 'first-run install offers bootstrap choice (fresh / restore / receive)' }
 # first-run install honors the configure run-mode answer (service vs foreground)
 $cfgSrc = Get-Content (Join-Path $ProjectDir 'node.ps1') -Raw
 if ($cfgSrc -match 'function Configure' -and $cfgSrc -match 'Background system service' -and $cfgSrc -match '\$script:AsService = \$true' -and $cfgSrc -match "Read-Ask 'Choose' '2'") { Pass 'Configure offers system-service install (run mode question)' } else { Fail 'Configure offers system-service install (run mode question)' }

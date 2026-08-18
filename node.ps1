@@ -278,6 +278,33 @@ function Show-Menu {
         if ($a -eq '1' -or $a -eq '') {
             if (-not (Test-Path $script:ConfigFile)) { Configure }
             if (-not (Ensure-Binary)) { exit 1 }
+            if (Test-StdinInteractive) {
+                Write-Host '  Bootstrap the chain:'
+                Write-Host '    1) Fresh sync from genesis (fastsync)'
+                Write-Host '    2) Restore from a snapshot (.tar.zst)'
+                Write-Host '    3) Receive a snapshot via thruflux (join code)'
+                $pick = Read-Ask 'Choose' '1'
+                switch ($pick) {
+                    '2' {
+                        $file = Read-Ask 'Snapshot file path' ''
+                        if ($file) {
+                            $script:SnapshotFrom = $file
+                            $script:Action = 'restore'
+                            return
+                        }
+                        Write-Host '[!] no file — falling back to fresh sync' -ForegroundColor Yellow
+                    }
+                    '3' {
+                        $code = Read-Ask 'Join code' ''
+                        if ($code) {
+                            $script:ReceiveCode = $code
+                            $script:Action = 'receive'
+                            return
+                        }
+                        Write-Host '[!] no code — falling back to fresh sync' -ForegroundColor Yellow
+                    }
+                }
+            }
             # The install just finished — confirm the user actually wants the
             # node started now (interactive only; scripted runs auto-continue).
             # The run-mode answer from Configure (service vs foreground) is

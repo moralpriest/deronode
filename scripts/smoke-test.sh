@@ -724,6 +724,12 @@ if echo "$first_run" | grep -q 'No derod installed yet' && echo "$first_run" | g
 else
     fail "first-run install prompts to start the node, then continues into start"
 fi
+# first-run install offers bootstrap choice: fresh sync / restore file / thruflux receive
+if echo "$first_run" | grep -q 'Fresh sync from genesis' && echo "$first_run" | grep -q 'Restore from a snapshot' && echo "$first_run" | grep -q 'Receive a snapshot via thruflux' && echo "$first_run" | grep -q 'ACTION=restore' && echo "$first_run" | grep -q 'ACTION=receive'; then
+    pass "first-run install offers bootstrap choice (fresh / restore / receive)"
+else
+    fail "first-run install offers bootstrap choice (fresh / restore / receive)"
+fi
 # first-run install honors the configure run-mode answer (service vs foreground)
 cfg_src="$(sed -n '/^configure()/,/^}/p' node.sh)"
 if echo "$cfg_src" | grep -q 'Background system service' && echo "$cfg_src" | grep -q 'AS_SERVICE=true' && echo "$cfg_src" | grep -q 'ask pick "Choose" "2"'; then

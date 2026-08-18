@@ -105,11 +105,13 @@ excludes our launchd agent and `cmd_update_external` is portable; PS sections
 `Start`/`Stop`/`Update-ExternalNode`, and the Windows `ExecutablePath` capture.
 
 First-run flow: when the menu's "Configure & install derod" finishes the
-download it asks **"derod installed. Start the node now?"** (interactive
-only — piped/scripted runs skip the prompt) and, on yes, continues into
-`start` (foreground or service per the run-mode answer) instead of bouncing
-back to the menu prompt. (Sections 14 bash / 9 ps cover the prompt +
-transition.)
+download it asks **"Bootstrap the chain"** — choose between a fresh sync from
+genesis (fastsync), restoring from a local snapshot (`.tar.zst`), or receiving
+a snapshot via thruflux (join code). A fresh sync then asks **"derod installed.
+Start the node now?"** (interactive only — piped/scripted runs skip the
+prompt) and, on yes, continues into `start` (foreground or service per the
+run-mode answer) instead of bouncing back to the menu prompt. (Sections
+14 bash / 9 ps cover the bootstrap prompt + transition.)
 
 Windows binary naming: on Windows the managed binary is `derod.exe`, not
 `derod` — an extensionless file cannot be executed there (CreateProcess/
