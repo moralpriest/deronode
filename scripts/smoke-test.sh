@@ -337,10 +337,10 @@ external_installed() { return 1; }
 rm -f "$PROJECT_DIR/derod.pid"
 SNAPFIX="$(mktemp -d)"
 SNAPCHAIN="$SNAPFIX/chain"
-mkdir -p "$SNAPCHAIN/balances/ab" "$SNAPCHAIN/bltx_store/b1"
-printf 'blob' > "$SNAPCHAIN/balances/ab/x1"
-printf 'blob2' > "$SNAPCHAIN/bltx_store/b1/y1"
-printf 'topomapdata' > "$SNAPCHAIN/topo.map"
+mkdir -p "$SNAPCHAIN/mainnet/balances/ab" "$SNAPCHAIN/mainnet/bltx_store/b1"
+printf 'blob' > "$SNAPCHAIN/mainnet/balances/ab/x1"
+printf 'blob2' > "$SNAPCHAIN/mainnet/bltx_store/b1/y1"
+printf 'topomapdata' > "$SNAPCHAIN/mainnet/topo.map"
 for decoy in peers.json trusted_peers.json ban_list.json config.json config_pool.json; do printf '{}' > "$SNAPCHAIN/$decoy"; done
 DATA_DIR_REAL="$SNAPCHAIN"
 CFG_RPC_BIND="127.0.0.1:39998"
@@ -406,16 +406,16 @@ if snapshot_restore >/dev/null 2>&1; then pass "restore runs offline"; else fail
 [ -n "$(ls -d "$SNAPREST/mainnet.bak-"* 2>/dev/null | head -1)" ] && pass "restore keeps .bak" || fail "restore keeps .bak"
 # restore without --from auto-picks the latest snapshot
 SNAPLAT="$(mktemp -d)"
-mkdir -p "$SNAPLAT/balances/ab" "$SNAPLAT/bltx_store/b1"
-printf 'oldblob' > "$SNAPLAT/balances/ab/x1"
-printf 'oldtopo' > "$SNAPLAT/topo.map"
+mkdir -p "$SNAPLAT/mainnet/balances/ab" "$SNAPLAT/mainnet/bltx_store/b1"
+printf 'oldblob' > "$SNAPLAT/mainnet/balances/ab/x1"
+printf 'oldtopo' > "$SNAPLAT/mainnet/topo.map"
 DATA_DIR_REAL="$SNAPLAT"
 SNAPSHOT_YES=true
 SNAPSHOT_FROM=""
 snapshot_any_derod_running() { return 1; }
 if snapshot_restore >/tmp/snaprest.out 2>&1; then pass "restore without --from auto-picks latest"; else fail "restore without --from auto-picks latest"; fi
 grep -q 'using latest snapshot' /tmp/snaprest.out && pass "restore reports latest snapshot name" || fail "restore reports latest snapshot name"
-[ -f "$SNAPLAT/balances/ab/x1" ] && [ "$(cat "$SNAPLAT/balances/ab/x1")" = "blob" ] && pass "auto-picked archive restores newer content" || fail "auto-picked archive restores newer content"
+[ -f "$SNAPLAT/mainnet/balances/ab/x1" ] && [ "$(cat "$SNAPLAT/mainnet/balances/ab/x1")" = "blob" ] && pass "auto-picked archive restores newer content" || fail "auto-picked archive restores newer content"
 # restore with an empty snapshot dir errors clearly
 EMPTYDIR="$(mktemp -d)"
 DATA_DIR_REAL="$EMPTYDIR"
@@ -462,14 +462,22 @@ c="$(snapshot_chain_dir)"
 [ "$c" = "$DATA_DIR_REAL/mainnet" ] && pass "snapshot_chain_dir falls back to DATA_DIR_REAL/mainnet" || fail "snapshot_chain_dir falls back to DATA_DIR_REAL/mainnet (got '$c')"
 # missing-member pre-check fails clearly (external_installed stays stubbed off)
 INCOMPLETE="$(mktemp -d)"
-mkdir -p "$INCOMPLETE/balances/ab"
-printf 'blob' > "$INCOMPLETE/balances/ab/x1"
-printf 'topomapdata' > "$INCOMPLETE/topo.map"
+mkdir -p "$INCOMPLETE/mainnet/balances/ab"
+printf 'blob' > "$INCOMPLETE/mainnet/balances/ab/x1"
+printf 'topomapdata' > "$INCOMPLETE/mainnet/topo.map"
 DATA_DIR_REAL="$INCOMPLETE"
 ERROUT="$(mktemp)"
 if snapshot_pack 2>"$ERROUT"; then fail "snapshot_pack rejects incomplete chain dir"; else pass "snapshot_pack rejects incomplete chain dir"; fi
 grep -q 'incomplete' "$ERROUT" && grep -q 'bltx_store' "$ERROUT" && pass "missing-member error names the member" || fail "missing-member error names the member (err: $(tr '\n' ' ' < "$ERROUT"))"
 rm -rf "$INCOMPLETE"; rm -f "$ERROUT"
+# leftover flat topo.map on a non-external install resolves to mainnet (not flat)
+FLATFIX="$(mktemp -d)"
+mkdir -p "$FLATFIX/chain"
+printf 'topomapdata' > "$FLATFIX/chain/topo.map"
+DATA_DIR_REAL="$FLATFIX/chain"
+c="$(snapshot_chain_dir)"
+[ "$c" = "$FLATFIX/chain/mainnet" ] && pass "flat topo.map without external resolves to mainnet" || fail "flat topo.map without external resolves to mainnet (got '$c')"
+rm -rf "$FLATFIX"
 rm -rf "$SNAPFIX" "$SNAPREST" "$SNAPREST".bak-* "$EXTSNAP"
 unset -f snapshot_pack snapshot_restore snapshot_chain_dir snapshot_height snapshot_derod_pids snapshot_running_on_data_dir snapshot_any_derod_running snapshot_size_raw snapshot_sha256_hex snapshot_verify_sha256 external_data_dir_from_unit external_data_dir_from_plist external_installed external_data_dir
 

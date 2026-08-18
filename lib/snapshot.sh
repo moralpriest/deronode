@@ -14,16 +14,17 @@ SNAPSHOT_EXCLUDE=(peers.json trusted_peers.json ban_list.json config.json config
 # only applies when the external unit's data dir already IS the mainnet store
 # (base/topo.map present, no nested mainnet/ subdir).
 snapshot_chain_dir() {
-    local base
+    local base ext=""
     if external_installed 2>/dev/null; then
         base="$(external_data_dir 2>/dev/null)"
         [ -n "$base" ] || base="$DATA_DIR_REAL"
+        ext=true
     else
         base="$DATA_DIR_REAL"
     fi
     if [ -d "$base/mainnet" ] && [ -e "$base/mainnet/topo.map" ]; then
         echo "$base/mainnet"
-    elif [ -e "$base/topo.map" ] && [ ! -d "$base/mainnet" ]; then
+    elif [ -n "$ext" ] && [ -e "$base/topo.map" ] && [ ! -d "$base/mainnet" ]; then
         echo "$base"
     else
         echo "$base/mainnet"
@@ -166,13 +167,8 @@ snapshot_pack() {
         echo "${C_ERR}[x] snapshot needs tar${C_RESET}" >&2
         return 1
     fi
-    # zstd CLI (brew install zstd / winget install zstandard) is preferred;
-    # GNU tar --zstd and modern bsdtar (macOS, Win10+) work without it.
-    local have_zstd=false have_tarzstd=false
-    command -v zstd >/dev/null 2>&1 && have_zstd=true
-    tar --help 2>/dev/null | grep -q -- '--zstd' && have_tarzstd=true
-    if ! $have_zstd && ! $have_tarzstd; then
-        echo "${C_ERR}[x] snapshot needs the zstd CLI (brew install zstd / winget install zstandard) or a tar with --zstd support${C_RESET}" >&2
+    if ! command -v zstd >/dev/null 2>&1; then
+        echo "${C_ERR}[x] snapshot needs the zstd CLI (brew install zstd / winget install zstandard)${C_RESET}" >&2
         return 1
     fi
 
@@ -184,16 +180,17 @@ snapshot_pack() {
     exc=()
     for e in "${SNAPSHOT_EXCLUDE[@]}"; do exc+=(--exclude="$e"); done
 
-    local ok=false
-    if $have_zstd; then
-        if tar "${exc[@]}" -C "$chain_dir" -cf - "${SNAPSHOT_INCLUDE[@]}" \
-                | zstd -T0 -q -"$level" --long=27 -o "$out.tmp"; then
-            ok=true
-        fi
+    local zstd_opts="-T0 -$level --long=27"
+    if snapshot_stdin_tty 2>/dev/null; then
+        zstd_opts="$zstd_opts --progress"
     else
-        if tar --zstd "${exc[@]}" -C "$chain_dir" -cf "$out.tmp" "${SNAPSHOT_INCLUDE[@]}" 2>/dev/null; then
-            ok=true
-        fi
+        zstd_opts="$zstd_opts -q"
+    fi
+
+    local ok=false
+    if tar "${exc[@]}" -C "$chain_dir" -cf - "${SNAPSHOT_INCLUDE[@]}" \
+            | zstd $zstd_opts -o "$out.tmp"; then
+        ok=true
     fi
     if $ok; then
         mv "$out.tmp" "$out"
@@ -345,7 +342,16 @@ snapshot_restore() {
     mv "$tmp"/* "$chain_dir"/ 2>/dev/null || mv "$tmp"/.[!.]* "$chain_dir"/ 2>/dev/null || true
     rmdir "$tmp" 2>/dev/null || true
 
-    echo "${C_OK}[*] restored into $chain_dir${C_RESET}"
+    if [ -f "$chain_dir/topo.map" ]; then
+        local sz
+        sz="$(wc -c < "$chain_dir/topo.map" 2>/dev/null)"
+        echo "${C_OK}[*] restored into $chain_dir (topo.map: ${sz:-?} bytes)${C_RESET}"
+    else
+        rm -rf "$chain_dir"
+        echo "${C_ERR}[x] archive missing topo.map after extract; restoring previous chain${C_RESET}" >&2
+        [ -n "$bak" ] && mv "$bak" "$chain_dir"
+        return 1
+    fi
     if [ -n "$bak" ]; then
         echo "${C_MUTE}    keep $bak until the node reaches height >= ${mani_h:-?}, then delete it manually.${C_RESET}"
     fi

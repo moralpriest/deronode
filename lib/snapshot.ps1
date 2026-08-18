@@ -7,14 +7,15 @@ $script:SnapshotExclude = @('peers.json', 'trusted_peers.json', 'ban_list.json',
 
 function Get-SnapshotChainDir {
     $base = $script:DataDirReal
+    $isExt = $false
     if (Test-ExternalInstalled) {
         $ext = Get-ExternalDataDir
-        if ($ext) { $base = $ext }
+        if ($ext) { $base = $ext; $isExt = $true }
     }
     $mn = Join-Path $base 'mainnet'
     if (Test-Path (Join-Path $mn 'topo.map')) { return $mn }
     $flat = Join-Path $base 'topo.map'
-    if ((Test-Path $flat) -and -not (Test-Path $mn)) { return $base }
+    if ($isExt -and (Test-Path $flat) -and -not (Test-Path $mn)) { return $base }
     return $mn
 }
 
@@ -161,15 +162,8 @@ function New-Snapshot {
         Write-Host '[x] snapshot needs tar' -ForegroundColor Red
         return $false
     }
-    # zstd CLI (brew install zstd / winget install zstandard) is preferred;
-    # GNU tar --zstd and modern bsdtar (macOS, Win10+) work without it.
-    $haveZstd = [bool](Get-Command zstd -ErrorAction SilentlyContinue)
-    $haveTarZstd = $false
-    try {
-        $haveTarZstd = [bool]((& tar --help 2>&1 | Select-String -Pattern '--zstd' -Quiet))
-    } catch { $haveTarZstd = $false }
-    if (-not $haveZstd -and -not $haveTarZstd) {
-        Write-Host '[x] snapshot needs the zstd CLI (brew install zstd / winget install zstandard) or a tar with --zstd support' -ForegroundColor Red
+    if (-not (Get-Command zstd -ErrorAction SilentlyContinue)) {
+        Write-Host '[x] snapshot needs the zstd CLI (brew install zstd / winget install zstandard)' -ForegroundColor Red
         return $false
     }
 
@@ -182,31 +176,20 @@ function New-Snapshot {
     $excArgs = @()
     foreach ($e in $script:SnapshotExclude) { $excArgs += "--exclude=$e" }
     $errFile = Join-Path $outDir '.snap-tar.err'
-    try {
-        if ($haveZstd) {
+        $zstdArgs = @("-T0", "-$level", "--long=27")
+        if (Test-StdinInteractive) { $zstdArgs += "--progress" } else { $zstdArgs += "-q" }
+        try {
             if ($script:IsWindows) {
                 $incStr = ($script:SnapshotInclude | ForEach-Object { '"{0}"' -f $_ }) -join ' '
                 $excStr = ($excArgs | ForEach-Object { '"{0}"' -f $_ }) -join ' '
-                $c = "cd /d ""$chainDir"" && tar $excStr -cf - $incStr | zstd -T0 -q -$level --long=27 -o ""$tmpOut"""
+                $zstdCmd = ($zstdArgs -join ' ')
+                $c = "cd /d ""$chainDir"" && tar $excStr -cf - $incStr | zstd $zstdCmd -o ""$tmpOut"""
                 & cmd.exe /d /c $c
                 if ($LASTEXITCODE -ne 0) { throw 'tar/zstd failed' }
             } else {
                 & tar @excArgs -C $chainDir -cf - @($script:SnapshotInclude) 2>$errFile |
-                    & zstd -T0 -q -$level --long=27 -o "$tmpOut"
+                    & zstd @zstdArgs -o "$tmpOut"
             }
-        } else {
-            # No zstd CLI — GNU tar --zstd / bsdtar handles compression itself.
-            if ($script:IsWindows) {
-                $incStr = ($script:SnapshotInclude | ForEach-Object { '"{0}"' -f $_ }) -join ' '
-                $excStr = ($excArgs | ForEach-Object { '"{0}"' -f $_ }) -join ' '
-                $c = "cd /d ""$chainDir"" && tar --zstd $excStr -cf ""$tmpOut"" $incStr"
-                & cmd.exe /d /c $c
-                if ($LASTEXITCODE -ne 0) { throw 'tar --zstd failed' }
-            } else {
-                & tar --zstd @excArgs -C $chainDir -cf "$tmpOut" @($script:SnapshotInclude) 2>$errFile
-                if ($LASTEXITCODE -ne 0) { throw 'tar --zstd failed' }
-            }
-        }
         $terr = ''
         if (Test-Path $errFile) {
             $raw = Get-Content $errFile -Raw
@@ -368,7 +351,16 @@ function Restore-Snapshot {
     Get-ChildItem $tmp -Force | Move-Item -Destination $chainDir -Force
     Remove-Item -Path $tmp -Recurse -Force -ErrorAction SilentlyContinue
 
-    Write-Host "[*] restored into $chainDir" -ForegroundColor Green
+    $topoPath = Join-Path $chainDir 'topo.map'
+    if (Test-Path $topoPath) {
+        $sz = (Get-Item $topoPath).Length
+        Write-Host "[*] restored into $chainDir (topo.map: $sz bytes)" -ForegroundColor Green
+    } else {
+        Remove-Item -Path $chainDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host '[x] archive missing topo.map after extract; restoring previous chain' -ForegroundColor Red
+        if ($bak) { Move-Item $bak $chainDir }
+        return $false
+    }
     if ($bak) { Write-Host "    keep $bak until the node reaches height >= $maniH, then delete it manually." -ForegroundColor DarkGray }
     return $true
 }

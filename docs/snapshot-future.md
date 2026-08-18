@@ -2,9 +2,9 @@
 
 The current snapshot feature ships a single self-contained `.tar.zst` archive
 (privacy-hardened: `balances/`, `bltx_store/`, `topo.map` only) with a `.sha256`
-checksum and a chain-facts-only `.manifest.json`. Restore extracts with `rargz`
-when present, else `tar --zstd`. This page tracks ideas deliberately left out
-of v1.
+checksum and a chain-facts-only `.manifest.json`. Pack requires the `zstd` CLI;
+restore extracts with `rargz` when present, else `tar --zstd`. This page tracks
+ideas deliberately left out of v1.
 
 ## 1. Cloud upload (S3 / R2 / B2)
 

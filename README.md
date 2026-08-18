@@ -166,7 +166,8 @@ deronode restore --from=./dero-mainnet-20260815-0001.tar.zst   # refuses while a
 
 Restore moves the current chain to `chain.bak-<timestamp>`, verifies the
 archive checksum (skips only with explicit confirmation), and extracts with
-`rargz` when installed, else plain `tar --zstd`. Keep the `.bak` until the node
+`rargz` when installed, else plain `tar --zstd`. The `zstd` CLI is required
+for packing (progress shown on interactive terminals). Keep the `.bak` until the node
 reaches the snapshot height, then delete it manually.
 
 Once the restore completes, an interactive run asks

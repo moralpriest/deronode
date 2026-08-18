@@ -196,10 +196,10 @@ $script:InstallDir = $ProjectDir
 $snapFix = Join-Path $ProjectDir '.snap-fixture'
 Remove-Item -Path $snapFix -Recurse -Force -ErrorAction SilentlyContinue
 $snapChain = Join-Path $snapFix 'chain'
-New-Item -ItemType Directory -Path (Join-Path $snapChain 'balances/ab'), (Join-Path $snapChain 'bltx_store/b1') -Force | Out-Null
-Set-Content (Join-Path $snapChain 'balances/ab/x1') 'blob' -NoNewline
-Set-Content (Join-Path $snapChain 'bltx_store/b1/y1') 'blob2' -NoNewline
-Set-Content (Join-Path $snapChain 'topo.map') 'topomapdata' -NoNewline
+New-Item -ItemType Directory -Path (Join-Path $snapChain 'mainnet/balances/ab'), (Join-Path $snapChain 'mainnet/bltx_store/b1') -Force | Out-Null
+Set-Content (Join-Path $snapChain 'mainnet/balances/ab/x1') 'blob' -NoNewline
+Set-Content (Join-Path $snapChain 'mainnet/bltx_store/b1/y1') 'blob2' -NoNewline
+Set-Content (Join-Path $snapChain 'mainnet/topo.map') 'topomapdata' -NoNewline
 foreach ($d in @('peers.json','trusted_peers.json','ban_list.json','config.json','config_pool.json')) { Set-Content (Join-Path $snapChain $d) '{}' -NoNewline }
 $script:DataDirReal = $snapChain
 $script:CFG.rpc_bind = '127.0.0.1:39998'
@@ -259,9 +259,9 @@ if (-not (Test-Path (Join-Path $restMainnet 'peers.json')) -and -not (Test-Path 
 if (Get-ChildItem "$restMainnet.bak-*" -ErrorAction SilentlyContinue) { Pass 'restore keeps .bak' } else { Fail 'restore keeps .bak' }
 # restore without --from auto-picks the latest snapshot
 $snapLat = Join-Path $snapFix 'lat'
-New-Item -ItemType Directory -Path (Join-Path $snapLat 'balances/ab'), (Join-Path $snapLat 'bltx_store/b1') -Force | Out-Null
-Set-Content (Join-Path $snapLat 'balances/ab/x1') 'oldblob' -NoNewline
-Set-Content (Join-Path $snapLat 'topo.map') 'oldtopo' -NoNewline
+New-Item -ItemType Directory -Path (Join-Path $snapLat 'mainnet/balances/ab'), (Join-Path $snapLat 'mainnet/bltx_store/b1') -Force | Out-Null
+Set-Content (Join-Path $snapLat 'mainnet/balances/ab/x1') 'oldblob' -NoNewline
+Set-Content (Join-Path $snapLat 'mainnet/topo.map') 'oldtopo' -NoNewline
 $script:DataDirReal = $snapLat
 $script:SnapshotYes = $true
 $script:SnapshotFrom = ''
@@ -272,7 +272,7 @@ try {
     if ($okRest) { Pass 'restore without --from auto-picks latest' } else { Fail 'restore without --from auto-picks latest' }
 } catch { Fail "restore without --from auto-picks latest (threw: $($_.Exception.Message))" }
 $script:DataDirReal = $snapLat
-$latBlob = (Get-Content (Join-Path $snapLat 'balances/ab/x1') -Raw)
+$latBlob = (Get-Content (Join-Path $snapLat 'mainnet/balances/ab/x1') -Raw)
 if ($latBlob -eq 'blob') { Pass 'auto-picked archive restores newer content' } else { Fail "auto-picked archive restores newer content (got '$latBlob')" }
 # restore with an empty snapshot dir errors clearly
 $emptyFix = Join-Path $snapFix 'empty'
@@ -324,11 +324,18 @@ function Test-ExternalInstalled { return $false }
 $c = Get-SnapshotChainDir
 $expected = Join-Path $script:DataDirReal 'mainnet'
 if ($c -eq $expected) { Pass 'Get-SnapshotChainDir falls back to DataDirReal/mainnet' } else { Fail "Get-SnapshotChainDir falls back to DataDirReal/mainnet (got '$c')" }
+# leftover flat topo.map on a non-external install resolves to mainnet (not flat)
+$flatFix = Join-Path $snapFix 'flat'
+New-Item -ItemType Directory -Path (Join-Path $flatFix 'chain') -Force | Out-Null
+Set-Content (Join-Path $flatFix 'chain/topo.map') 'flatdata' -NoNewline
+$script:DataDirReal = Join-Path $flatFix 'chain'
+$c = Get-SnapshotChainDir
+if ($c -eq (Join-Path $flatFix 'chain/mainnet')) { Pass 'flat topo.map without external resolves to mainnet' } else { Fail "flat topo.map without external resolves to mainnet (got '$c')" }
 # missing-member pre-check fails clearly (external stub stays off)
 $incFix = Join-Path $snapFix 'incomplete'
-New-Item -ItemType Directory -Path (Join-Path $incFix 'balances/ab') -Force | Out-Null
-Set-Content (Join-Path $incFix 'balances/ab/x1') 'blob' -NoNewline
-Set-Content (Join-Path $incFix 'topo.map') 'topomapdata' -NoNewline
+New-Item -ItemType Directory -Path (Join-Path $incFix 'mainnet/balances/ab') -Force | Out-Null
+Set-Content (Join-Path $incFix 'mainnet/balances/ab/x1') 'blob' -NoNewline
+Set-Content (Join-Path $incFix 'mainnet/topo.map') 'topomapdata' -NoNewline
 $script:DataDirReal = $incFix
 $script:SnapshotYes = $false
 $script:DryRun = $false
