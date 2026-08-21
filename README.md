@@ -331,6 +331,8 @@ floor (genesis is always kept, so it is excluded). Raise `--prune-history` (or
 
 > **What's the difference?** `--fastsync` is *how you sync the first time* — it downloads a recent pruned snapshot from peers (30–60 min) instead of replaying from genesis. `--prune-history=100000` is *how big you stay* — it keeps only the last ~100k blocks (plus genesis) and discards older block bodies, holding disk around ~50 GB as a rolling window. Use both for a fast, compact node. A fast-synced node without pruning starts at ~50 GB but grows without bound; without fast-sync you replay the full chain (1–2 days). A pruned node validates fully but `status` will show `Chain is pruned till …` and can't serve historical TXs before the prune height.
 
+> **Already have a local derod?** If deronode detects an existing node (systemd unit or a running `derod` outside its own `bin/`), the first prompt offers **U) Update existing node** (patch in place, keep chain & config) vs **I) Fresh install** (reconfigure and pick a sync profile). `U` is the default when detection fires.
+
 ## How it works
 
 - `deronode` launcher prefers PowerShell 7 (`node.ps1`) and falls back to bash

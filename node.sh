@@ -233,6 +233,21 @@ confirm_disk() {
 
 configure() {
     local advanced=false
+    if external_installed 2>/dev/null; then
+        local _ext_unit _ext_dir
+        _ext_unit="$(external_unit 2>/dev/null || true)"
+        _ext_dir="$(external_data_dir 2>/dev/null || echo "${DATA_DIR_REAL:-unknown}")"
+        echo "${C_WARN}[!] Existing local derod detected${_ext_unit:+ at $_ext_unit} (chain: ${_ext_dir:-unknown})${C_RESET}" >&2
+        echo " What do you want to do?" >&2
+        echo "   ${C_BOLD}U) Update existing node${C_RESET}  — patch derod in place, keep chain & config" >&2
+        echo "   ${C_BOLD}I) Fresh install${C_RESET}         — reconfigure and pick a sync profile" >&2
+        local _gate
+        ask _gate "Choose [U/I]" "U"
+        case "$_gate" in
+            [Ii]* ) : ;; # continue to fresh install
+            * ) echo "${C_INFO}[*] Updating existing node...${C_RESET}" >&2; cmd_update; return $? ;;
+        esac
+    fi
     echo "${C_INFO}[*] derod configuration (first run)${C_RESET}"
     echo ""
     ask CFG_INTEGRATOR_ADDRESS "Integrator address (dero1.../deto1..., empty = dev address)" "$CFG_INTEGRATOR_ADDRESS"

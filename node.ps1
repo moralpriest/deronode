@@ -211,6 +211,17 @@ function Confirm-Disk {
 }
 
 function Configure {
+    if (Test-ExternalInstalled) {
+        $extUnit = try { Get-ExternalUnit } catch { $null }
+        $extDir = try { Get-ExternalDataDir } catch { $script:DataDirReal }
+        $where = if ($extUnit) { " at $extUnit" } else { "" }
+        Write-Host "[!] Existing local derod detected$where (chain: $extDir)" -ForegroundColor Yellow
+        Write-Host ' What do you want to do?'
+        Write-Host '   U) Update existing node  — patch derod in place, keep chain & config' -ForegroundColor White
+        Write-Host '   I) Fresh install         — reconfigure and pick a sync profile' -ForegroundColor White
+        $gate = Read-Ask 'Choose [U/I]' 'U'
+        if ($gate -notmatch '^[Ii]') { Write-Host '[*] Updating existing node...' -ForegroundColor Cyan; Update-Node; return }
+    }
     Write-Host '[*] derod configuration' -ForegroundColor DarkCyan
     Write-Host ''
     $ia = Read-Ask 'Integrator address (dero1.../deto1..., empty = dev address)' $script:CFG.integrator_address
