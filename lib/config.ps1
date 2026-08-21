@@ -64,10 +64,14 @@ function Apply-TestnetDefaults {
 function Set-SyncProfile {
     param([string]$Profile)
     switch ($Profile) {
-        'pruned' { $script:CFG.sync_profile = 'pruned'; $script:CFG.fastsync = $true; $script:CFG.prune_history = 100000 }
+        'minimal'  { $script:CFG.sync_profile = 'minimal';  $script:CFG.fastsync = $true; $script:CFG.prune_history = 5000 }
+        'compact'  { $script:CFG.sync_profile = 'compact';  $script:CFG.fastsync = $true; $script:CFG.prune_history = 10000 }
+        'standard' { $script:CFG.sync_profile = 'standard'; $script:CFG.fastsync = $true; $script:CFG.prune_history = 20000 }
+        'balanced' { $script:CFG.sync_profile = 'balanced'; $script:CFG.fastsync = $true; $script:CFG.prune_history = 100000 }
+        'pruned'   { $script:CFG.sync_profile = 'balanced'; $script:CFG.fastsync = $true; $script:CFG.prune_history = 100000 } # alias for backwards compat
         'full'   { $script:CFG.sync_profile = 'full';   $script:CFG.fastsync = $false; $script:CFG.prune_history = $null }
         'none'   { $script:CFG.sync_profile = 'none';   $script:CFG.fastsync = $false; $script:CFG.prune_history = $null }
-        default  { throw "sync-profile must be pruned|full|none" }
+        default  { throw "sync-profile must be minimal|compact|standard|balanced|full|none|custom (pruned is alias for balanced)" }
     }
 }
 

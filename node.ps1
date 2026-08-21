@@ -193,8 +193,13 @@ function Parse-Args {
 function Confirm-Disk {
     $need = 0
     switch ($script:CFG.sync_profile) {
-        'pruned' { $need = 50 }
-        'full' { $need = 230 }
+        'minimal'  { $need = 1 }
+        'compact'  { $need = 2 }
+        'standard' { $need = 10 }
+        'balanced' { $need = 50 }
+        'pruned'   { $need = 50 } # alias
+        'custom'   { $need = 50 } # conservative fallback; custom could be smaller
+        'full'     { $need = 230 }
     }
     if ($need -eq 0) { return }
     if ($script:IsWindows) { return }
@@ -214,13 +219,29 @@ function Configure {
 
     Write-Host ''
     Write-Host '  Sync profile:'
-    Write-Host '    1) Pruned (Recommended)   --fastsync --prune-history=100000  (~50 GB, last 100k blocks)'
-    Write-Host '    2) Full History (Archival)  no prune, full history from genesis (230 GB+, plan 500 GB)'
-    Write-Host '    3) Custom       keep whatever --fastsync/--prune-history are set to'
+    Write-Host '    1) Minimal (testing)        --prune-history=5000   (~200 MB, 5k blocks)'
+    Write-Host '    2) Compact                  --prune-history=10000  (~2 GB, 10k blocks)'
+    Write-Host '    3) Standard                 --prune-history=20000  (~10 GB, 20k blocks)'
+    Write-Host '    4) Balanced (Recommended)   --prune-history=100000 (~50 GB, 100k blocks)'
+    Write-Host '    5) Full History (Archival)  no prune, full history from genesis (230 GB+, plan 500 GB)'
+    Write-Host '    6) Custom                   enter prune-history blocks (>=50)'
     Write-Host '      --fastsync = fast bootstrap (snapshot); --prune-history = rolling window that caps disk' -ForegroundColor DarkGray
-    $pick = Read-Ask 'Choose' '1'
-    if ($pick -eq '2') { Set-SyncProfile 'full' }
-    elseif ($pick -ne '3') { Set-SyncProfile 'pruned' }
+    $pick = Read-Ask 'Choose' '4'
+    switch ($pick) {
+        '1' { Set-SyncProfile 'minimal' }
+        '2' { Set-SyncProfile 'compact' }
+        '3' { Set-SyncProfile 'standard' }
+        '4' { Set-SyncProfile 'balanced' }
+        '5' { Set-SyncProfile 'full' }
+        '6' {
+            $custom = Read-Ask 'Prune history blocks (>=50, empty=no prune)' ''
+            if ([string]::IsNullOrWhiteSpace($custom)) { Set-SyncProfile 'none' }
+            elseif ($custom -match '^\d+$' -and [int]$custom -ge 50) {
+                $script:CFG.sync_profile = 'custom'; $script:CFG.fastsync = $true; $script:CFG.prune_history = [int]$custom
+            } else { Write-Host '[x] Enter a number >=50' -ForegroundColor Red; Set-SyncProfile 'balanced' }
+        }
+        default { Set-SyncProfile 'balanced' }
+    }
 
     Write-Host ''
     $script:CFG.node_tag = Read-Ask 'Node tag (public name, optional)' $script:CFG.node_tag

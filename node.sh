@@ -86,7 +86,7 @@ Usage: deronode [command] [options]
     --config=<path>      Config file (default ./config.json)
     --source=release|dev Update source (release download or community-dev compile)
     --integrator-address=<addr>  10% rewards address
-    --sync-profile=<p>   pruned (Recommended, ~50 GB) | full (Archival) | none (shortcut for fastsync/prune)
+    --sync-profile=<p>   minimal (5k, ~200 MB) | compact (10k, ~2 GB) | standard (20k, ~10 GB) | balanced (100k, ~50 GB, Recommended) | full (Archival) | none
     --fastsync           Enable fast sync (bootstrap only)
     --no-fastsync        Disable fast sync
     --prune-history=<n>  Prune history to this topo height
@@ -200,10 +200,14 @@ parse_cli_args() {
 
 set_sync_profile() {
     case "$1" in
-        pruned) CFG_SYNC_PROFILE=pruned; CFG_FASTSYNC=true; CFG_PRUNE_HISTORY=100000 ;;
-        full)   CFG_SYNC_PROFILE=full; CFG_FASTSYNC=false; CFG_PRUNE_HISTORY="" ;;
-        none)   CFG_SYNC_PROFILE=none; CFG_FASTSYNC=false; CFG_PRUNE_HISTORY="" ;;
-        *) echo "${C_ERR}[x] sync-profile must be pruned|full|none${C_RESET}" >&2; exit 1 ;;
+        minimal)  CFG_SYNC_PROFILE=minimal;  CFG_FASTSYNC=true; CFG_PRUNE_HISTORY=5000 ;;
+        compact)  CFG_SYNC_PROFILE=compact;  CFG_FASTSYNC=true; CFG_PRUNE_HISTORY=10000 ;;
+        standard) CFG_SYNC_PROFILE=standard; CFG_FASTSYNC=true; CFG_PRUNE_HISTORY=20000 ;;
+        balanced) CFG_SYNC_PROFILE=balanced; CFG_FASTSYNC=true; CFG_PRUNE_HISTORY=100000 ;;
+        pruned)   CFG_SYNC_PROFILE=balanced; CFG_FASTSYNC=true; CFG_PRUNE_HISTORY=100000 ;; # alias for backwards compat
+        full)     CFG_SYNC_PROFILE=full;     CFG_FASTSYNC=false; CFG_PRUNE_HISTORY="" ;;
+        none)     CFG_SYNC_PROFILE=none;     CFG_FASTSYNC=false; CFG_PRUNE_HISTORY="" ;;
+        *) echo "${C_ERR}[x] sync-profile must be minimal|compact|standard|balanced|full|none (pruned is alias for balanced)${C_RESET}" >&2; exit 1 ;;
     esac
 }
 
@@ -211,16 +215,19 @@ set_sync_profile() {
 confirm_disk() {
     local profile="$CFG_SYNC_PROFILE" need warn=0
     case "$profile" in
-        pruned) need=50 ;;
-        full)   need=230 ;;
-        none)   return 0 ;;
-        *)      return 0 ;;
+        minimal)  need=1 ;;
+        compact)  need=2 ;;
+        standard) need=10 ;;
+        balanced|pruned) need=50 ;;
+        full)     need=230 ;;
+        none)     return 0 ;;
+        *)        return 0 ;;
     esac
     local free
     free="$(df -Pk "$DATA_DIR_REAL" 2>/dev/null | awk 'NR==2{print $4}')"
     if [ -n "$free" ] && [ "$free" -lt $(( need * 1024 * 1024 )) ]; then
         echo "${C_WARN}[!] $need GB (${C_RESET}${C_BOLD}$profile${C_RESET}${C_WARN}) recommended for data-dir $DATA_DIR_REAL; this disk shows ~$(( free / 1024 / 1024 )) GB free.${C_RESET}" >&2
-        [ "$(yesno "Continue anyway?" n)" = "n" ] && { echo "${C_ERR}[x] Aborted. Free space or pick a pruned profile.${C_RESET}" >&2; exit 1; }
+        [ "$(yesno "Continue anyway?" n)" = "n" ] && { echo "${C_ERR}[x] Aborted. Free space or pick a smaller pruned profile (Minimal/Compact).${C_RESET}" >&2; exit 1; }
     fi
 }
 
@@ -234,16 +241,29 @@ configure() {
 
     echo ""
     echo "  Sync profile:"
-    echo "    ${C_BOLD}1) Pruned (Recommended)${C_RESET}   --fastsync --prune-history=100000  (~50 GB, last 100k blocks)"
-    echo "    ${C_BOLD}2) Full History (Archival)${C_RESET}  no prune, full history from genesis (230 GB+, plan 500 GB)"
-    echo "    ${C_BOLD}3) Custom${C_RESET}       keep whatever --fastsync/--prune-history are set to"
+    echo "    ${C_BOLD}1) Minimal (testing)${C_RESET}        --prune-history=5000   (~200 MB, 5k blocks)"
+    echo "    ${C_BOLD}2) Compact${C_RESET}                  --prune-history=10000  (~2 GB, 10k blocks)"
+    echo "    ${C_BOLD}3) Standard${C_RESET}                 --prune-history=20000  (~10 GB, 20k blocks)"
+    echo "    ${C_BOLD}4) Balanced (Recommended)${C_RESET}  --prune-history=100000 (~50 GB, 100k blocks)"
+    echo "    ${C_BOLD}5) Full History (Archival)${C_RESET}  no prune, full history from genesis (230 GB+, plan 500 GB)"
+    echo "    ${C_BOLD}6) Custom${C_RESET}                   enter prune-history blocks (≥50)"
     echo "      ${C_DIM}--fastsync = fast bootstrap (snapshot); --prune-history = rolling window that caps disk${C_RESET}"
-    local pick
-    ask pick "Choose" "1"
+    local pick custom_prune
+    ask pick "Choose" "4"
     case "$pick" in
-        2) set_sync_profile full ;;
-        3) : ;;
-        *) set_sync_profile pruned ;;
+        1) set_sync_profile minimal ;;
+        2) set_sync_profile compact ;;
+        3) set_sync_profile standard ;;
+        4) set_sync_profile balanced ;;
+        5) set_sync_profile full ;;
+        6) while true; do
+               ask custom_prune "Prune history blocks (≥50, empty=no prune)" ""
+               if [ -z "$custom_prune" ]; then set_sync_profile none; break
+               elif [[ "$custom_prune" =~ ^[0-9]+$ ]] && [ "$custom_prune" -ge 50 ]; then
+                   CFG_SYNC_PROFILE=custom; CFG_FASTSYNC=true; CFG_PRUNE_HISTORY="$custom_prune"; break
+               else echo "${C_ERR}[x] Enter a number ≥50${C_RESET}" >&2; fi
+           done ;;
+        *) set_sync_profile balanced ;;
     esac
 
     echo ""
