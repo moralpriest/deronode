@@ -74,7 +74,7 @@ Usage: deronode [command] [options]
     --config=<path>      Config file (default ./config.json)
     --source=release|dev Update source (release download or community-dev compile)
     --integrator-address=<addr>  10% rewards address
-    --sync-profile=<p>   pruned | full | none (shortcut for fastsync/prune)
+    --sync-profile=<p>   pruned (Recommended, ~50 GB) | full (Archival) | none (shortcut for fastsync/prune)
     --fastsync           Enable fast sync (bootstrap only)
     --no-fastsync        Disable fast sync
     --prune-history=<n>  Prune history to this topo height
@@ -214,9 +214,10 @@ function Configure {
 
     Write-Host ''
     Write-Host '  Sync profile:'
-    Write-Host '    1) Pruned VPS   --fastsync --prune-history=100000  (~50 GB) [recommended]'
-    Write-Host '    2) Full archival  no prune, full history from genesis (230 GB+, plan 500 GB)'
+    Write-Host '    1) Pruned (Recommended)   --fastsync --prune-history=100000  (~50 GB, last 100k blocks)'
+    Write-Host '    2) Full History (Archival)  no prune, full history from genesis (230 GB+, plan 500 GB)'
     Write-Host '    3) Custom       keep whatever --fastsync/--prune-history are set to'
+    Write-Host '      --fastsync = fast bootstrap (snapshot); --prune-history = rolling window that caps disk' -ForegroundColor DarkGray
     $pick = Read-Ask 'Choose' '1'
     if ($pick -eq '2') { Set-SyncProfile 'full' }
     elseif ($pick -ne '3') { Set-SyncProfile 'pruned' }

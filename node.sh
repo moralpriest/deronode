@@ -86,7 +86,7 @@ Usage: deronode [command] [options]
     --config=<path>      Config file (default ./config.json)
     --source=release|dev Update source (release download or community-dev compile)
     --integrator-address=<addr>  10% rewards address
-    --sync-profile=<p>   pruned | full | none (shortcut for fastsync/prune)
+    --sync-profile=<p>   pruned (Recommended, ~50 GB) | full (Archival) | none (shortcut for fastsync/prune)
     --fastsync           Enable fast sync (bootstrap only)
     --no-fastsync        Disable fast sync
     --prune-history=<n>  Prune history to this topo height
@@ -234,9 +234,10 @@ configure() {
 
     echo ""
     echo "  Sync profile:"
-    echo "    ${C_BOLD}1) Pruned VPS${C_RESET}   --fastsync --prune-history=100000  (~50 GB) [recommended]"
-    echo "    ${C_BOLD}2) Full archival${C_RESET} no prune, full history from genesis (230 GB+, plan 500 GB)"
+    echo "    ${C_BOLD}1) Pruned (Recommended)${C_RESET}   --fastsync --prune-history=100000  (~50 GB, last 100k blocks)"
+    echo "    ${C_BOLD}2) Full History (Archival)${C_RESET}  no prune, full history from genesis (230 GB+, plan 500 GB)"
     echo "    ${C_BOLD}3) Custom${C_RESET}       keep whatever --fastsync/--prune-history are set to"
+    echo "      ${C_DIM}--fastsync = fast bootstrap (snapshot); --prune-history = rolling window that caps disk${C_RESET}"
     local pick
     ask pick "Choose" "1"
     case "$pick" in

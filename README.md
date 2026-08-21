@@ -15,7 +15,7 @@ Install deronode (a full sibling of deromine) by running:
 
     curl -fsSL https://raw.githubusercontent.com/moralpriest/deronode/main/install.sh | bash
 
-Then configure and start a pruned node (fast-sync, ~50 GB, VPS-friendly):
+Then configure and start a pruned node (fast-sync, ~50 GB):
 
     deronode --integrator-address=<YOUR_DERO_ADDRESS> --sync-profile=pruned start --service
 
@@ -322,8 +322,10 @@ floor (genesis is always kept, so it is excluded). Raise `--prune-history` (or
 
 | Profile | Flags | Disk (blockchain only) |
 |---------|-------|------------------------|
-| **Pruned** (recommended, VPS) | `--fastsync --prune-history=100000` | ~50 GB |
-| **Full archival** | (no prune, full history from genesis) | 230 GB+, plan 500 GB |
+| **Pruned (Recommended)** | `--fastsync --prune-history=100000` | ~50 GB |
+| **Full History (Archival)** | (no prune, full history from genesis) | 230 GB+, plan 500 GB |
+
+> **What's the difference?** `--fastsync` is *how you sync the first time* — it downloads a recent pruned snapshot from peers (30–60 min) instead of replaying from genesis. `--prune-history=100000` is *how big you stay* — it keeps only the last ~100k blocks (plus genesis) and discards older block bodies, holding disk around ~50 GB as a rolling window. Use both for a fast, compact node. A fast-synced node without pruning starts at ~50 GB but grows without bound; without fast-sync you replay the full chain (1–2 days). A pruned node validates fully but `status` will show `Chain is pruned till …` and can't serve historical TXs before the prune height.
 
 ## How it works
 
